@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 from openai import OpenAI
@@ -24,6 +25,38 @@ def build_client():
     if not api_key:
         raise RuntimeError("请设置 OPENAI_API_KEY/DEEPSEEK_API_KEY，或在 src/config.json 中配置 api_key")
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0,)
+
+
+def create_log_file() -> Path:
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return log_dir / f"docx_agent_{timestamp}.log"
+
+
+def append_log(log_path: Path, title: str, data=None) -> None:
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"\n{'=' * 80}\n")
+        f.write(f"{datetime.now().isoformat(timespec='seconds')} | {title}\n")
+        f.write(f"{'=' * 80}\n")
+        if data is None:
+            return
+        if isinstance(data, str):
+            f.write(data)
+        else:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+        f.write("\n")
+
+
+def tool_status(result: str) -> str:
+    try:
+        parsed = json.loads(result)
+    except json.JSONDecodeError:
+        return "完成"
+    status = parsed.get("status")
+    if status:
+        return str(status)
+    return "完成"
 
 
 SYSTEM_PROMPT = f"""
@@ -51,10 +84,12 @@ def main():
     client = build_client()
     model = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
     thinking_type = os.getenv("DOCX_AGENT_THINKING", "enabled").strip().lower()
+    log_path = create_log_file()
 
     print("=" * 60)
     print("DOCX Agent Demo - lxml + zipfile")
     print("=" * 60)
+    print(f"运行日志: {log_path}")
     print("示例需求：")
     print("把 文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。")
     print("=" * 60)
@@ -63,6 +98,17 @@ def main():
     if not user_input:
         print("需求不能为空")
         return
+
+    append_log(
+        log_path,
+        "启动配置",
+        {
+            "model": model,
+            "thinking_type": thinking_type,
+            "tool_count": len(TOOLS_SCHEMA),
+            "user_input": user_input,
+        },
+    )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -81,29 +127,44 @@ def main():
             }
             if thinking_type and thinking_type != "disabled":
                 request_kwargs["extra_body"] = {"thinking": {"type": thinking_type}}
+            append_log(
+                log_path,
+                f"第 {round_index} 轮模型请求",
+                {
+                    "model": model,
+                    "message_count": len(messages),
+                    "tool_count": len(TOOLS_SCHEMA),
+                    "thinking_type": thinking_type,
+                },
+            )
             response = client.chat.completions.create(**request_kwargs)
         except APITimeoutError as exc:
             print("\n模型请求超时。可以先检查网络、base_url、模型名，或设置更长超时：")
             print("$env:OPENAI_TIMEOUT_SECONDS=\"120\"")
             print(f"错误信息: {exc}")
+            append_log(log_path, "模型请求超时", {"error_type": type(exc).__name__, "message": str(exc)})
             return
         except APIConnectionError as exc:
             print("\n无法连接到模型服务。请检查网络、代理、OPENAI_BASE_URL/DeepSeek base_url。")
             print(f"错误信息: {exc}")
+            append_log(log_path, "模型连接错误", {"error_type": type(exc).__name__, "message": str(exc)})
             return
         except APIError as exc:
             print("\n模型服务返回错误。请检查 API key、模型名、thinking/tool calling 是否兼容。")
             print(f"错误信息: {exc}")
+            append_log(log_path, "模型服务错误", {"error_type": type(exc).__name__, "message": str(exc)})
             return
         except Exception as exc:
             print("\n请求模型时发生未知错误。")
             print(f"错误类型: {type(exc).__name__}")
             print(f"错误信息: {exc}")
+            append_log(log_path, "模型未知错误", {"error_type": type(exc).__name__, "message": str(exc)})
             return
 
         msg = response.choices[0].message
         msg_dict = msg.model_dump(exclude_none=True)
         messages.append(msg_dict)
+        append_log(log_path, f"第 {round_index} 轮模型响应", msg_dict)
 
         reasoning_content = getattr(msg, "reasoning_content", None) or msg_dict.get("reasoning_content")
         if reasoning_content:
@@ -114,8 +175,8 @@ def main():
             for tool_call in msg.tool_calls:
                 name = tool_call.function.name
                 args = tool_call.function.arguments
-                print(f"\n调用工具: {name}")
-                print(f"参数: {args}")
+                print(f"\n调用工具: {name}（详情见日志）")
+                append_log(log_path, f"调用工具: {name}", {"tool": name, "arguments": args})
                 try:
                     result = call_tool(name, args)
                 except Exception as exc:
@@ -128,7 +189,8 @@ def main():
                         },
                         ensure_ascii=False,
                     )
-                print(f"结果: {result[:1200]}")
+                append_log(log_path, f"工具结果: {name}", result)
+                print(f"工具状态: {tool_status(result)}")
                 messages.append(
                     {
                         "role": "tool",
@@ -142,6 +204,7 @@ def main():
         print("最终回复")
         print("=" * 60)
         print(msg.content)
+        append_log(log_path, "最终回复", msg.content)
         break
 
 
