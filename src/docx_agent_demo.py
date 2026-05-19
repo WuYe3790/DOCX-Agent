@@ -9,6 +9,11 @@ from openai import APIConnectionError, APIError, APITimeoutError
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 
 
+STYLE_REVIEW = "style_review"
+EDITING = "editing"
+REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure"}
+
+
 def load_config():
     config_path = Path(__file__).with_name("config.json")
     if not config_path.exists():
@@ -66,6 +71,48 @@ def read_user_input(prompt: str) -> str | None:
     return user_input
 
 
+def read_yes_no(prompt: str) -> bool | None:
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in {"quit", "exit"}:
+            return None
+        if answer == "y":
+            return True
+        if answer == "n":
+            return False
+        print("请输入 Y 或 N；输入 quit/exit 结束。")
+
+
+def tool_schemas_for_state(state: str):
+    if state == STYLE_REVIEW:
+        allowed = REVIEW_TOOL_NAMES
+        return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
+    return TOOLS_SCHEMA
+
+
+def tool_names(tool_schemas) -> set[str]:
+    return {schema["function"]["name"] for schema in tool_schemas}
+
+
+def state_prompt(state: str, available_tool_schemas) -> str:
+    if state == STYLE_REVIEW:
+        state_rule = """
+当前状态：样式审核。
+你现在只能做样式和结构分析，不能编辑文档。
+请优先调用 analyze_docx_style_samples；必要时调用 read_docx_structure 辅助定位。
+拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id，并请用户确认或修正。
+用户没有确认前，不要进行任何写入、替换、删除或 diff。
+""".strip()
+    else:
+        state_rule = """
+当前状态：编辑执行。
+用户已经完成或跳过样式审核。你可以使用当前可见工具完成文档编辑。
+编辑前仍应读取结构或查找锚点；编辑后必须调用 diff_docx 验证变化。
+""".strip()
+
+    return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
+
+
 SYSTEM_PROMPT = f"""
 你是一个精细 DOCX 编辑 agent。
 
@@ -81,10 +128,7 @@ SYSTEM_PROMPT = f"""
 9. 表格结构操作必须优先使用表格坐标工具：插入整行用 insert_table_row_after，清空单元格用 clear_table_cell，删除整行用 delete_table_row，替换单元格全部内容用 replace_table_cell_text。
 10. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
 11. 用户说“删除整行”时不要只删除行内文字；用户说“清空单元格”时不要删除行或单元格。
-12. 遇到长文档、大量编辑、需要仿照原文档排版或用户没有明确格式要求时，先调用 analyze_docx_style_samples，向用户展示样式样本并请求确认，再继续批量写入。
-
-工具说明：
-{render_tools_prompt()}
+12. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
 
@@ -127,15 +171,20 @@ def main():
         {"role": "user", "content": user_input},
     ]
 
+    workflow_state = STYLE_REVIEW
     round_index = 0
     while True:
         round_index += 1
+        current_tool_schemas = tool_schemas_for_state(workflow_state)
+        current_tool_names = tool_names(current_tool_schemas)
+        request_messages = messages + [{"role": "system", "content": state_prompt(workflow_state, current_tool_schemas)}]
         print(f"\n第 {round_index} 轮：正在请求模型 {model} ...", flush=True)
+        print(f"当前状态: {workflow_state}，可用工具数: {len(current_tool_schemas)}", flush=True)
         try:
             request_kwargs = {
                 "model": model,
-                "messages": messages,
-                "tools": TOOLS_SCHEMA,
+                "messages": request_messages,
+                "tools": current_tool_schemas,
             }
             if thinking_type and thinking_type != "disabled":
                 request_kwargs["extra_body"] = {"thinking": {"type": thinking_type}}
@@ -144,8 +193,9 @@ def main():
                 f"第 {round_index} 轮模型请求",
                 {
                     "model": model,
-                    "message_count": len(messages),
-                    "tool_count": len(TOOLS_SCHEMA),
+                    "workflow_state": workflow_state,
+                    "message_count": len(request_messages),
+                    "tool_names": sorted(current_tool_names),
                     "thinking_type": thinking_type,
                 },
             )
@@ -189,18 +239,28 @@ def main():
                 args = tool_call.function.arguments
                 print(f"\n调用工具: {name}（详情见日志）")
                 append_log(log_path, f"调用工具: {name}", {"tool": name, "arguments": args})
-                try:
-                    result = call_tool(name, args)
-                except Exception as exc:
+                if name not in current_tool_names:
                     result = json.dumps(
                         {
                             "status": "error",
                             "tool": name,
-                            "error_type": type(exc).__name__,
-                            "message": str(exc),
+                            "message": f"tool is not allowed in current state: {workflow_state}",
                         },
                         ensure_ascii=False,
                     )
+                else:
+                    try:
+                        result = call_tool(name, args)
+                    except Exception as exc:
+                        result = json.dumps(
+                            {
+                                "status": "error",
+                                "tool": name,
+                                "error_type": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                            ensure_ascii=False,
+                        )
                 append_log(log_path, f"工具结果: {name}", result)
                 print(f"工具状态: {tool_status(result)}")
                 messages.append(
@@ -218,10 +278,26 @@ def main():
         print(msg.content)
         append_log(log_path, "最终回复", msg.content)
 
-        user_input = read_user_input("\n请输入下一步需求，或输入 quit/exit 结束：\n")
-        while user_input == "":
-            print("输入为空；请输入下一步需求，或输入 quit/exit 结束。")
+        if workflow_state == STYLE_REVIEW:
+            approved = read_yes_no("\n是否确认样式审核并进入编辑阶段？输入 Y 继续，N 留在审核阶段：\n")
+            if approved is None:
+                append_log(log_path, "用户退出", {"phase": "style_review_approval", "round_index": round_index})
+                print("已退出。")
+                break
+            if approved:
+                workflow_state = EDITING
+                append_log(log_path, "状态切换", {"to": workflow_state, "reason": "user_approved_style_review"})
+                print("已进入编辑阶段。")
+                user_input = read_user_input("\n请输入下一步编辑需求，或输入 quit/exit 结束：\n")
+            else:
+                append_log(log_path, "样式审核未通过", {"round_index": round_index})
+                user_input = read_user_input("\n请补充你的样式审核建议，或输入 quit/exit 结束：\n")
+        else:
             user_input = read_user_input("\n请输入下一步需求，或输入 quit/exit 结束：\n")
+
+        while user_input == "":
+            print("输入为空；请输入内容，或输入 quit/exit 结束。")
+            user_input = read_user_input("\n请输入内容，或输入 quit/exit 结束：\n")
         if user_input is None:
             append_log(log_path, "用户退出", {"phase": "after_assistant_reply", "round_index": round_index})
             print("已退出。")

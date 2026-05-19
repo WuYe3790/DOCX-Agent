@@ -54,17 +54,15 @@ TOOLS_SCHEMA = [
 ]
 
 
-def render_tools_prompt() -> str:
+def render_tools_prompt(tool_schemas=None) -> str:
     """生成精简工具说明，方便注入到不支持原生工具调用的 agent 提示词中。"""
+    schemas = tool_schemas if tool_schemas is not None else TOOLS_SCHEMA
     lines = [
         "你可以使用以下本地 DOCX 工具。每个工具都是一个独立 Python 文件，便于维护。",
-        "优先工作流：read_docx_structure/find_text/analyze_docx_style_samples -> 编辑工具 -> diff_docx -> unzip_docx。",
-        "长文档、格式敏感或需要仿照排版时，先用 analyze_docx_style_samples 提取样式样本，并让用户审核正文/标题/表格样式 sample_id。",
-        "表格操作优先用坐标工具：insert_table_row_after、clear_table_cell、delete_table_row、replace_table_cell_text。",
-        "注意 read_docx_structure 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；操作前要用表格行列文本确认目标。",
+        "当前只允许使用本列表中的工具；没有出现在本列表中的工具不能调用。",
         "",
     ]
-    for schema in TOOLS_SCHEMA:
+    for schema in schemas:
         fn = schema["function"]
         params = fn["parameters"]
         required = params.get("required", [])
