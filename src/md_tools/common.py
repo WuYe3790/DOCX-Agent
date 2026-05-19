@@ -97,6 +97,10 @@ def parse_markdown_blocks(markdown_text: str) -> list[dict]:
             flush_paragraph(line_number - 1)
             continue
 
+        if re.match(r"^(-{3,}|\*{3,}|_{3,})$", stripped):
+            flush_paragraph(line_number - 1)
+            continue
+
         heading_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         if heading_match:
             flush_paragraph(line_number - 1)

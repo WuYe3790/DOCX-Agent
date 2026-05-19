@@ -46,6 +46,9 @@ def apply_markdown_ir_to_table_cell(
     markdown_path: str,
     style_profile_path: str,
     style_mapping: dict,
+    include_block_ids: list[str] | None = None,
+    line_start: int | None = None,
+    line_end: int | None = None,
 ) -> str:
     """按模型提供的类型到 sample_id 映射，把 Markdown IR 写入 Word 表格单元格。"""
     try:
@@ -53,7 +56,12 @@ def apply_markdown_ir_to_table_cell(
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 
-    blocks = parse_markdown_blocks(content)
+    all_blocks = parse_markdown_blocks(content)
+    try:
+        blocks = _filter_blocks(all_blocks, include_block_ids, line_start, line_end)
+    except ValueError as exc:
+        return json_result({"status": "error", "message": str(exc), "markdown_path": str(target)})
+
     unsupported = [block for block in blocks if block["type"] not in SUPPORTED_TYPES or not block.get("supported", True)]
     if unsupported:
         return json_result(
@@ -61,6 +69,7 @@ def apply_markdown_ir_to_table_cell(
                 "status": "unsupported_markdown",
                 "message": "第一版暂不支持 Markdown 表格、代码块等复杂块；请先改成标题、正文或列表。",
                 "markdown_path": str(target),
+                "selected_block_count": len(blocks),
                 "unsupported_blocks": [
                     {
                         "block_id": block["block_id"],
@@ -71,6 +80,7 @@ def apply_markdown_ir_to_table_cell(
                     }
                     for block in unsupported
                 ],
+                "hint": "可以用 include_block_ids 或 line_start/line_end 只选择不含表格的块，或用 write_markdown_draft 生成简化片段。",
             }
         )
 
@@ -134,6 +144,9 @@ def apply_markdown_ir_to_table_cell(
             "cell_index": cell_index,
             "style_profile_path": style_profile_path,
             "style_mapping": style_mapping,
+            "include_block_ids": include_block_ids,
+            "line_start": line_start,
+            "line_end": line_end,
             "before_text": before_text,
             "after_text": after_text,
             "written_block_count": len(render_items),
@@ -142,6 +155,33 @@ def apply_markdown_ir_to_table_cell(
             "after_table": table_summary(table),
         }
     )
+
+
+def _filter_blocks(
+    blocks: list[dict],
+    include_block_ids: list[str] | None,
+    line_start: int | None,
+    line_end: int | None,
+) -> list[dict]:
+    if include_block_ids and (line_start is not None or line_end is not None):
+        raise ValueError("include_block_ids 和 line_start/line_end 不能同时使用")
+    if line_start is not None and line_end is not None and line_end < line_start:
+        raise ValueError("line_end must be >= line_start")
+
+    if include_block_ids:
+        wanted = {str(block_id) for block_id in include_block_ids}
+        selected = [block for block in blocks if block["block_id"] in wanted]
+        missing = sorted(wanted - {block["block_id"] for block in selected})
+        if missing:
+            raise ValueError(f"include_block_ids not found: {', '.join(missing)}")
+        return selected
+
+    if line_start is not None or line_end is not None:
+        start = line_start if line_start is not None else 1
+        end = line_end if line_end is not None else 10**9
+        return [block for block in blocks if block["line_start"] >= start and block["line_end"] <= end]
+
+    return blocks
 
 
 def _render_text(block: dict) -> str:
@@ -171,6 +211,13 @@ tools_schema = {
                     "description": "Markdown IR 类型到样式样本 ID 的映射，例如 heading1->S002, heading2->S004, paragraph/list_item->S001",
                     "additionalProperties": {"type": "string"},
                 },
+                "include_block_ids": {
+                    "type": "array",
+                    "description": "可选。只渲染指定 block_id 列表，例如 [\"B012\", \"B013\"]；未选中的表格等不支持块会被忽略",
+                    "items": {"type": "string"},
+                },
+                "line_start": {"type": "integer", "description": "可选。只渲染 line_start 到 line_end 范围内完整包含的块"},
+                "line_end": {"type": "integer", "description": "可选。只渲染 line_start 到 line_end 范围内完整包含的块"},
             },
             "required": [
                 "docx_path",

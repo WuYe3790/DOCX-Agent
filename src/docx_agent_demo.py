@@ -20,9 +20,12 @@ MD_DRAFT_TOOL_NAMES = {
 }
 WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
+    "write_markdown_draft",
     "read_markdown_draft",
     "parse_markdown_draft",
     "apply_markdown_ir_to_table_cell",
+    "clear_table_cell",
+    "delete_table_row",
     "diff_docx",
 }
 
@@ -123,18 +126,23 @@ def state_prompt(state: str, available_tool_schemas) -> str:
         state_rule = """
 当前状态：Markdown 草稿。
 你现在只能生成、读取和解析 Markdown 草稿，不能编辑 docx。
-请先用 write_markdown_draft 把要写入 Word 的长内容保存到 out/drafts。
+请用 write_markdown_draft 按目标位置拆分 Markdown 片段，保存到 out/drafts；不要写成包含全流程说明的单个自由草稿。
+建议每个目标单元格一个 Markdown 文件，例如 cover_course.md、experiment_name.md、flowchart_placeholder.md、process_discussion.md。
+每个片段只写最终要进入 Word 的内容，不要写“保留原内容”“删除整行”“备注”“格式说明”等编辑计划。
 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
 用户没有确认 Markdown 草稿前，不要尝试写入 Word。
 """.strip()
     else:
         state_rule = """
 当前状态：Word 写入。
-用户已经确认 Markdown 草稿。你现在只能读取 Word 结构、读取/解析 Markdown、按 style_mapping 写入 Word，并用 diff_docx 验证。
+用户已经确认 Markdown 草稿。你现在只能读取 Word 结构、读取/解析/修订 Markdown 片段、按 style_mapping 写入 Word，执行必要结构操作，并用 diff_docx 验证。
 不要调用直接文本替换、段落插入、表格直接替换等工具；当前状态也不会暴露这些工具。
 写入前必须用 read_docx_structure 确认目标表格坐标，并用 parse_markdown_draft 确认 Markdown IR。
+如果 Markdown 文件中只有部分块要写入，调用 apply_markdown_ir_to_table_cell 时使用 include_block_ids 或 line_start/line_end。
+如果现有 Markdown 片段不适合写入，可以用 write_markdown_draft 生成或覆盖一个更小的片段文件；这只能用于修订 Markdown，不能绕过渲染工具直接编辑 docx。
 然后由你基于样式审核结果选择 style_mapping，调用 apply_markdown_ir_to_table_cell 写入 Word。
 style_mapping 示例：heading1=章节标题样本，heading2=子标题样本，paragraph/list_item=正文样本。
+删除整行用 delete_table_row；清空单元格用 clear_table_cell。不要用 Markdown 渲染工具表达删除或清空。
 写入后必须调用 diff_docx 验证变化。
 """.strip()
 
