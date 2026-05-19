@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+.env
+src/config.json
+.venv/
+venv/
+
+# 本地工具测试输出
+文档格式测试/cases/tool_demo/
