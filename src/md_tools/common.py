@@ -121,6 +121,7 @@ def parse_markdown_blocks(markdown_text: str) -> list[dict]:
         list_match = re.match(r"^([-*+]|\d+[.)])\s+(.+)$", stripped)
         if list_match:
             flush_paragraph(line_number - 1)
+            indent_spaces = len(line) - len(line.lstrip(" "))
             blocks.append(
                 _block(
                     "list_item",
@@ -129,6 +130,7 @@ def parse_markdown_blocks(markdown_text: str) -> list[dict]:
                     line_number,
                     line,
                     marker=list_match.group(1),
+                    indent_level=indent_spaces // 2,
                 )
             )
             continue

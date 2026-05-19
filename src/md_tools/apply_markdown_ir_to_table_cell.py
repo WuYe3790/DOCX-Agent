@@ -12,6 +12,7 @@ try:
         load_document_xml,
         NS,
         set_run_bold,
+        W,
         table_summary,
         write_document_xml,
     )
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
         load_document_xml,
         NS,
         set_run_bold,
+        W,
         table_summary,
         write_document_xml,
     )
@@ -106,6 +108,9 @@ def apply_markdown_ir_to_table_cell(
                 "type": block_type,
                 "text": _render_text(block),
                 "sample_id": sample_id,
+                "line_start": block["line_start"],
+                "line_end": block["line_end"],
+                "indent_level": block.get("indent_level", 0),
             }
         )
 
@@ -126,13 +131,20 @@ def apply_markdown_ir_to_table_cell(
     first_sample = load_style_sample(style_profile_path, first_item["sample_id"])
     paragraph = clear_cell_to_empty_paragraph(cell)
     _write_inline_markdown_to_paragraph(paragraph, first_item["text"], first_sample)
+    _apply_list_indent(paragraph, first_item)
 
     current = paragraph
+    previous_item = first_item
     for item in render_items[1:]:
+        if item["line_start"] > previous_item["line_end"] + 1:
+            insert_paragraphs_after(current, [""], style_paragraph=current)
+            current = current.getnext()
         insert_paragraphs_after(current, [""], style_paragraph=current)
         current = current.getnext()
         sample = load_style_sample(style_profile_path, item["sample_id"])
         _write_inline_markdown_to_paragraph(current, item["text"], sample)
+        _apply_list_indent(current, item)
+        previous_item = item
 
     after_text = cell_text(cell)
     write_document_xml(docx_path, output_path, root)
@@ -190,8 +202,32 @@ def _filter_blocks(
 def _render_text(block: dict) -> str:
     if block["type"] == "list_item":
         marker = block.get("marker") or "-"
-        return f"{marker} {block['text']}"
+        prefix = "  " * int(block.get("indent_level", 0))
+        return f"{prefix}{marker} {block['text']}"
     return block["text"]
+
+
+def _apply_list_indent(paragraph, item: dict) -> None:
+    ppr = paragraph.find(f"{W}pPr")
+    if ppr is not None:
+        for child in list(ppr):
+            if child.tag == f"{W}ind":
+                ppr.remove(child)
+    if item["type"] != "list_item":
+        return
+    indent_level = int(item.get("indent_level", 0))
+    if indent_level <= 0:
+        return
+    from lxml import etree
+
+    if ppr is None:
+        ppr = etree.Element(f"{W}pPr")
+        paragraph.insert(0, ppr)
+    ind = etree.Element(f"{W}ind")
+    left_twips = 360 * indent_level
+    ind.set(f"{W}left", str(left_twips))
+    ind.set(f"{W}hanging", "180")
+    ppr.append(ind)
 
 
 def _write_inline_markdown_to_paragraph(paragraph, text: str, style_sample: dict) -> None:
