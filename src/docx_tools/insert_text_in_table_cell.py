@@ -1,8 +1,18 @@
-import copy
-
 from lxml import etree
 
-from .common import NS, W, json_result, load_document_xml, paragraph_text, set_text_preserve_space, tables, write_document_xml
+from .common import (
+    NS,
+    W,
+    append_run_to_paragraph,
+    insert_paragraphs_after,
+    json_result,
+    load_document_xml,
+    make_paragraph_like,
+    paragraph_text,
+    split_text_for_paragraphs,
+    tables,
+    write_document_xml,
+)
 
 
 def insert_text_in_table_cell(
@@ -14,6 +24,7 @@ def insert_text_in_table_cell(
     insert_text: str,
     paragraph_index: int = 1,
     append: bool = True,
+    newline_mode: str = "paragraphs",
 ) -> str:
     """向表格单元格插入文本。表格、行、单元格索引都从 1 开始计数。"""
     root = load_document_xml(docx_path)
@@ -48,16 +59,20 @@ def insert_text_in_table_cell(
     paragraph = cell_paragraphs[paragraph_index - 1]
     before_text = paragraph_text(paragraph)
     existing_runs = paragraph.xpath("./w:r", namespaces=NS)
+    first_text, extra_paragraphs = split_text_for_paragraphs(insert_text, newline_mode)
 
     if append and existing_runs:
-        source_run = existing_runs[-1]
-        new_run = _make_run_from_source(source_run, insert_text)
-        paragraph.append(new_run)
+        append_run_to_paragraph(paragraph, first_text, existing_runs[-1])
         mode = "append_new_run"
     else:
-        new_run = _make_run_from_paragraph(paragraph, insert_text)
-        paragraph.append(new_run)
+        source_paragraph = paragraph
+        if first_text:
+            new_paragraph = make_paragraph_like(source_paragraph, first_text)
+            run = new_paragraph.find(f"{W}r")
+            paragraph.append(run)
         mode = "create_run_in_cell_paragraph"
+
+    inserted_paragraph_count = insert_paragraphs_after(paragraph, extra_paragraphs)
 
     write_document_xml(docx_path, output_path, root)
     return json_result(
@@ -70,30 +85,12 @@ def insert_text_in_table_cell(
             "cell_index": cell_index,
             "paragraph_index": paragraph_index,
             "mode": mode,
+            "newline_mode": newline_mode,
+            "inserted_paragraph_count": inserted_paragraph_count,
             "before_text": before_text,
             "after_text": paragraph_text(paragraph),
         }
     )
-
-
-def _make_run_from_source(source_run, text: str):
-    new_run = etree.Element(f"{W}r", nsmap=source_run.nsmap)
-    rpr = source_run.find(f"{W}rPr")
-    if rpr is not None:
-        new_run.append(copy.deepcopy(rpr))
-    text_node = etree.SubElement(new_run, f"{W}t")
-    set_text_preserve_space(text_node, text)
-    return new_run
-
-
-def _make_run_from_paragraph(paragraph, text: str):
-    new_run = etree.Element(f"{W}r", nsmap=paragraph.nsmap)
-    paragraph_rpr = paragraph.find(f"{W}pPr/{W}rPr")
-    if paragraph_rpr is not None:
-        new_run.append(copy.deepcopy(paragraph_rpr))
-    text_node = etree.SubElement(new_run, f"{W}t")
-    set_text_preserve_space(text_node, text)
-    return new_run
 
 
 tools_schema = {
@@ -112,6 +109,11 @@ tools_schema = {
                 "insert_text": {"type": "string", "description": "要插入的文本"},
                 "paragraph_index": {"type": "integer", "description": "单元格内第几个直接段落，默认 1"},
                 "append": {"type": "boolean", "description": "是否追加到现有段落末尾，默认 true"},
+                "newline_mode": {
+                    "type": "string",
+                    "description": "插入文本包含换行时的处理方式：paragraphs 拆成多个单元格内段落，inline 替换为空格；默认 paragraphs",
+                    "enum": ["paragraphs", "inline"],
+                },
             },
             "required": ["docx_path", "output_path", "table_index", "row_index", "cell_index", "insert_text"],
         },

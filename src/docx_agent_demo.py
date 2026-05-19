@@ -34,6 +34,8 @@ SYSTEM_PROMPT = f"""
 2. 插入文字时优先保留原 run 格式。
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
+5. 一次工具调用尽量只替换或写入一行内容；如果要写多段正文，优先用 replace_text 写第一段，再用 insert_paragraph_after 逐段追加。
+6. 如果用户给出的内容本身包含换行，必须使用支持 newline_mode 的工具，并优先选择 newline_mode="paragraphs"，不要把长正文塞进单个 run。
 
 工具说明：
 {render_tools_prompt()}

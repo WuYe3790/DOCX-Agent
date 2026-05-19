@@ -9,6 +9,8 @@ from .common import (
     paragraph_text_segments,
     paragraphs,
     set_text_preserve_space,
+    split_text_for_paragraphs,
+    insert_paragraphs_after,
     write_document_xml,
 )
 
@@ -20,6 +22,7 @@ def insert_text_at(
     insert_text: str,
     offset: int = -1,
     occurrence: int = 1,
+    newline_mode: str = "paragraphs",
 ) -> str:
     """
     在 word/document.xml 中根据锚点附近的位置插入文字。
@@ -50,7 +53,9 @@ def insert_text_at(
                     raise ValueError("offset cannot be greater than anchor_text length")
                 insert_at = anchor_start + offset
 
-            change = _insert_into_paragraph(paragraph, insert_at, insert_text)
+            first_text, extra_paragraphs = split_text_for_paragraphs(insert_text, newline_mode)
+            change = _insert_into_paragraph(paragraph, insert_at, first_text)
+            inserted_paragraph_count = insert_paragraphs_after(paragraph, extra_paragraphs)
             write_document_xml(docx_path, output_path, root)
             return json_result(
                 {
@@ -62,6 +67,8 @@ def insert_text_at(
                     "anchor_text": anchor_text,
                     "insert_text": insert_text,
                     "insert_at": insert_at,
+                    "newline_mode": newline_mode,
+                    "inserted_paragraph_count": inserted_paragraph_count,
                     "change": change,
                     "new_paragraph_text": paragraph_text(paragraph),
                 }
@@ -141,6 +148,11 @@ tools_schema = {
                     "description": "相对 anchor_text 的插入偏移；-1 表示插在 anchor_text 后面",
                 },
                 "occurrence": {"type": "integer", "description": "第几个匹配项，1-based，默认 1"},
+                "newline_mode": {
+                    "type": "string",
+                    "description": "插入文本包含换行时的处理方式：paragraphs 拆成多个段落，inline 替换为空格；默认 paragraphs",
+                    "enum": ["paragraphs", "inline"],
+                },
             },
             "required": ["docx_path", "output_path", "anchor_text", "insert_text"],
         },

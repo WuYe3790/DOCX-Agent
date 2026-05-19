@@ -1,10 +1,13 @@
 import json
 
+from .delete_text import delete_text, tools_schema as delete_text_schema
 from .diff_docx import diff_docx, tools_schema as diff_docx_schema
 from .find_text import find_text, tools_schema as find_text_schema
+from .insert_paragraph_after import insert_paragraph_after, tools_schema as insert_paragraph_after_schema
 from .insert_text_at import insert_text_at, tools_schema as insert_text_at_schema
 from .insert_text_in_table_cell import insert_text_in_table_cell, tools_schema as insert_text_in_table_cell_schema
 from .read_docx_structure import read_docx_structure, tools_schema as read_docx_structure_schema
+from .replace_text import replace_text, tools_schema as replace_text_schema
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
 
@@ -13,6 +16,9 @@ TOOLS = {
     "find_text": find_text,
     "insert_text_at": insert_text_at,
     "insert_text_in_table_cell": insert_text_in_table_cell,
+    "replace_text": replace_text,
+    "delete_text": delete_text,
+    "insert_paragraph_after": insert_paragraph_after,
     "diff_docx": diff_docx,
     "unzip_docx": unzip_docx,
 }
@@ -22,6 +28,9 @@ TOOLS_SCHEMA = [
     find_text_schema,
     insert_text_at_schema,
     insert_text_in_table_cell_schema,
+    replace_text_schema,
+    delete_text_schema,
+    insert_paragraph_after_schema,
     diff_docx_schema,
     unzip_docx_schema,
 ]

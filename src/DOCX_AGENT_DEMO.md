@@ -25,6 +25,15 @@
 - `docx_tools/insert_text_in_table_cell.py`
   - 向指定表格单元格插入文字。
   - 适合空白单元格。
+- `docx_tools/replace_text.py`
+  - 按逻辑段落文本替换内容。
+  - 支持跨多个 run 的文本替换。
+- `docx_tools/delete_text.py`
+  - 删除指定文本。
+  - 支持跨多个 run 命中，并可清理占位符周围空白。
+- `docx_tools/insert_paragraph_after.py`
+  - 在包含锚点文本的段落后新增段落。
+  - 支持复制前一段、后一段或空样式。
 - `docx_tools/diff_docx.py`
   - 对比两个 docx 包，输出变化文件和段落文本变化。
 - `docx_tools/unzip_docx.py`
