@@ -8,6 +8,7 @@ from .insert_text_at import insert_text_at, tools_schema as insert_text_at_schem
 from .insert_text_in_table_cell import insert_text_in_table_cell, tools_schema as insert_text_in_table_cell_schema
 from .read_docx_structure import read_docx_structure, tools_schema as read_docx_structure_schema
 from .replace_text import replace_text, tools_schema as replace_text_schema
+from .set_text_format import set_text_format, tools_schema as set_text_format_schema
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
 
@@ -19,6 +20,7 @@ TOOLS = {
     "replace_text": replace_text,
     "delete_text": delete_text,
     "insert_paragraph_after": insert_paragraph_after,
+    "set_text_format": set_text_format,
     "diff_docx": diff_docx,
     "unzip_docx": unzip_docx,
 }
@@ -31,6 +33,7 @@ TOOLS_SCHEMA = [
     replace_text_schema,
     delete_text_schema,
     insert_paragraph_after_schema,
+    set_text_format_schema,
     diff_docx_schema,
     unzip_docx_schema,
 ]

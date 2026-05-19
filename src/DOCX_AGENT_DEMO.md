@@ -34,6 +34,9 @@
 - `docx_tools/insert_paragraph_after.py`
   - 在包含锚点文本的段落后新增段落。
   - 支持复制前一段、后一段或空样式。
+- `docx_tools/set_text_format.py`
+  - 对指定文本设置字符格式。
+  - 支持清除直接格式、转正文格式、设置颜色、加粗和字号。
 - `docx_tools/diff_docx.py`
   - 对比两个 docx 包，输出变化文件和段落文本变化。
 - `docx_tools/unzip_docx.py`
@@ -72,3 +75,18 @@ python -c "from src.docx_tools.insert_text_at import insert_text_at; print(inser
 - 输出新文件：`文档格式测试/cases/tool_demo/demo_insert.docx`
 - 修改模式：`split_run`
 - 新段落文本：`依据[TOOL-DEMO]实验指导书`
+
+## 格式策略
+
+写入类工具支持 `format_policy`：
+
+- `preserve`：保留原 run 格式，适合标题占位符替换。
+- `clear`：清除常见直接字符格式。
+- `body`：转成正文格式，至少移除颜色、加粗和高亮。
+- `custom`：显式设置颜色、加粗、字号。
+
+常用规则：
+
+- 蓝色提示或占位符替换为正式正文时，使用 `format_policy="body"`。
+- 标题占位符替换但保留标题视觉效果时，使用 `format_policy="preserve"`。
+- 局部加粗、改颜色、改字号时，使用 `set_text_format`。

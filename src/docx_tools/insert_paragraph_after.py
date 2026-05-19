@@ -1,4 +1,5 @@
 from .common import (
+    apply_format_policy_to_paragraph,
     json_result,
     insert_paragraphs_after,
     load_document_xml,
@@ -19,6 +20,11 @@ def insert_paragraph_after(
     occurrence: int = 1,
     style_source: str = "previous",
     newline_mode: str = "paragraphs",
+    format_policy: str = "preserve",
+    color: str | None = None,
+    bold: bool | None = None,
+    font_size_half_points: int | None = None,
+    font_size_pt: float | None = None,
 ) -> str:
     """在包含锚点文本的段落后新增段落。"""
     root = load_document_xml(docx_path)
@@ -42,7 +48,27 @@ def insert_paragraph_after(
             first_text, extra_paragraphs = split_text_for_paragraphs(new_text, newline_mode)
             new_paragraph = _make_paragraph(paragraph, first_text, style_source)
             paragraph.addnext(new_paragraph)
+            apply_format_policy_to_paragraph(
+                new_paragraph,
+                format_policy,
+                color=color,
+                bold=bold,
+                font_size_half_points=font_size_half_points,
+                font_size_pt=font_size_pt,
+            )
             inserted_extra_count = insert_paragraphs_after(new_paragraph, extra_paragraphs, new_paragraph)
+            current = new_paragraph
+            for _ in range(inserted_extra_count):
+                current = current.getnext()
+                if current is not None:
+                    apply_format_policy_to_paragraph(
+                        current,
+                        format_policy,
+                        color=color,
+                        bold=bold,
+                        font_size_half_points=font_size_half_points,
+                        font_size_pt=font_size_pt,
+                    )
             write_document_xml(docx_path, output_path, root)
             return json_result(
                 {
@@ -54,6 +80,7 @@ def insert_paragraph_after(
                     "occurrence": occurrence,
                     "style_source": style_source,
                     "newline_mode": newline_mode,
+                    "format_policy": format_policy,
                     "anchor_paragraph_index": paragraph_index,
                     "new_paragraph_index_estimate": paragraph_index + 1,
                     "inserted_paragraph_count": 1 + inserted_extra_count,
@@ -115,6 +142,15 @@ tools_schema = {
                     "description": "新增文本包含换行时的处理方式：paragraphs 拆成多个连续段落，inline 替换为空格；默认 paragraphs",
                     "enum": ["paragraphs", "inline"],
                 },
+                "format_policy": {
+                    "type": "string",
+                    "description": "新增段落文本的格式策略：preserve 保留样式来源格式，clear 清除直接字符格式，body 转正文格式，custom 使用显式格式；默认 preserve",
+                    "enum": ["preserve", "clear", "body", "custom"],
+                },
+                "color": {"type": "string", "description": "custom 策略下的 RGB 颜色，如 FF0000 或 #FF0000"},
+                "bold": {"type": "boolean", "description": "custom 策略下是否加粗"},
+                "font_size_half_points": {"type": "integer", "description": "custom/body 策略下字号，单位为半磅，如 24 表示 12 磅"},
+                "font_size_pt": {"type": "number", "description": "custom/body 策略下字号，单位为磅，如 12"},
             },
             "required": ["docx_path", "output_path", "anchor_text", "new_text"],
         },

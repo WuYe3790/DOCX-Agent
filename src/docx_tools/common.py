@@ -212,6 +212,74 @@ def select_source_run(paragraph):
     return runs[-1] if runs else None
 
 
+def isolate_text_range_in_paragraph(paragraph, start: int, end: int):
+    """把段落逻辑文本范围拆成独立 run，返回覆盖该范围的 run 列表。"""
+    if start < 0 or end <= start:
+        raise ValueError("invalid text range")
+
+    segments = paragraph_text_segments(paragraph)
+    affected = [seg for seg in segments if seg["end"] > start and seg["start"] < end]
+    if not affected:
+        raise ValueError("text range does not touch any text node")
+
+    if affected[0]["text_node"] is affected[-1]["text_node"]:
+        seg = affected[0]
+        local_start = start - seg["start"]
+        local_end = end - seg["start"]
+        return _split_single_segment(seg, local_start, local_end)
+
+    result_runs = []
+    first = affected[0]
+    first_local_start = start - first["start"]
+    if first_local_start > 0:
+        split_runs = _split_single_segment(first, first_local_start, len(first["text"]))
+        result_runs.extend(split_runs)
+    else:
+        result_runs.append(first["run"])
+
+    for seg in affected[1:-1]:
+        if seg["run"] not in result_runs:
+            result_runs.append(seg["run"])
+
+    last = affected[-1]
+    last_local_end = end - last["start"]
+    if last_local_end < len(last["text"]):
+        split_runs = _split_single_segment(last, 0, last_local_end)
+        result_runs.extend([run for run in split_runs if run not in result_runs])
+    elif last["run"] not in result_runs:
+        result_runs.append(last["run"])
+
+    cleanup_empty_text_runs(paragraph)
+    return result_runs
+
+
+def _split_single_segment(segment, local_start: int, local_end: int):
+    text = segment["text"]
+    run = segment["run"]
+    parent = run.getparent()
+    if parent is None:
+        raise ValueError("run has no parent")
+
+    before = text[:local_start]
+    middle = text[local_start:local_end]
+    after = text[local_end:]
+    index = parent.index(run)
+    parent.remove(run)
+
+    inserted = []
+    offset = 0
+    if before:
+        parent.insert(index + offset, make_run_like(run, before))
+        offset += 1
+    middle_run = make_run_like(run, middle)
+    parent.insert(index + offset, middle_run)
+    inserted.append(middle_run)
+    offset += 1
+    if after:
+        parent.insert(index + offset, make_run_like(run, after))
+    return inserted
+
+
 def replace_text_range_in_paragraph(paragraph, start: int, end: int, replacement: str):
     """在一个段落的逻辑文本范围内替换内容，支持跨多个 run。"""
     if start < 0 or end < start:
@@ -242,6 +310,7 @@ def replace_text_range_in_paragraph(paragraph, start: int, end: int, replacement
             "before": before,
             "after": after,
             "affected_runs": 1,
+            "run": first["run"],
         }
 
     before = first["text"][:first_local_start]
@@ -271,6 +340,7 @@ def replace_text_range_in_paragraph(paragraph, start: int, end: int, replacement
         "after": after,
         "affected_runs": len({id(seg["run"]) for seg in affected}),
         "removed_runs": len(removed_runs),
+        "run": first_run,
     }
 
 
@@ -294,3 +364,116 @@ def _can_remove_text_run(run) -> bool:
             continue
         return False
     return True
+
+
+def apply_format_policy_to_paragraph(paragraph, format_policy: str = "preserve", **custom):
+    """对段落内所有直接文本 run 应用格式策略。"""
+    changed = 0
+    for run in paragraph.xpath("./w:r", namespaces=NS):
+        if apply_format_policy_to_run(run, format_policy, **custom):
+            changed += 1
+    return changed
+
+
+def apply_format_policy_to_run(run, format_policy: str = "preserve", **custom):
+    """对单个 run 应用格式策略。"""
+    policy = (format_policy or "preserve").lower()
+    if policy == "preserve":
+        return False
+    if policy == "clear":
+        clear_direct_run_format(run)
+        return True
+    if policy == "body":
+        apply_body_format(run)
+        return True
+    if policy == "custom":
+        apply_custom_run_format(run, **custom)
+        return True
+    raise ValueError("format_policy must be preserve, clear, body or custom")
+
+
+def clear_direct_run_format(run):
+    """清除常见直接字符格式，保留字体信息。"""
+    rpr = run.find(f"{W}rPr")
+    if rpr is None:
+        return
+    for tag in ("color", "b", "bCs", "i", "iCs", "sz", "szCs", "highlight", "u", "shd"):
+        _remove_rpr_child(rpr, tag)
+    _remove_empty_rpr(run)
+
+
+def apply_body_format(run, font_size_half_points: int | None = None):
+    """应用普通正文策略：去颜色、去加粗，必要时设置字号。"""
+    rpr = _ensure_rpr(run)
+    for tag in ("color", "b", "bCs", "highlight", "shd"):
+        _remove_rpr_child(rpr, tag)
+    if font_size_half_points is not None:
+        set_run_font_size(run, font_size_half_points)
+    _remove_empty_rpr(run)
+
+
+def apply_custom_run_format(
+    run,
+    color: str | None = None,
+    bold: bool | None = None,
+    font_size_half_points: int | None = None,
+    font_size_pt: float | None = None,
+):
+    """应用显式字符格式。字号优先使用 half-points；也可传 pt。"""
+    if color is not None:
+        set_run_color(run, color)
+    if bold is not None:
+        set_run_bold(run, bold)
+    if font_size_half_points is None and font_size_pt is not None:
+        font_size_half_points = int(round(font_size_pt * 2))
+    if font_size_half_points is not None:
+        set_run_font_size(run, font_size_half_points)
+    _remove_empty_rpr(run)
+
+
+def set_run_color(run, color: str | None):
+    rpr = _ensure_rpr(run)
+    _remove_rpr_child(rpr, "color")
+    if color:
+        elem = etree.Element(f"{W}color")
+        elem.set(f"{W}val", color.upper().lstrip("#"))
+        rpr.append(elem)
+
+
+def set_run_bold(run, enabled: bool):
+    rpr = _ensure_rpr(run)
+    _remove_rpr_child(rpr, "b")
+    _remove_rpr_child(rpr, "bCs")
+    if enabled:
+        rpr.append(etree.Element(f"{W}b"))
+        rpr.append(etree.Element(f"{W}bCs"))
+
+
+def set_run_font_size(run, half_points: int):
+    rpr = _ensure_rpr(run)
+    _remove_rpr_child(rpr, "sz")
+    _remove_rpr_child(rpr, "szCs")
+    for tag in ("sz", "szCs"):
+        elem = etree.Element(f"{W}{tag}")
+        elem.set(f"{W}val", str(int(half_points)))
+        rpr.append(elem)
+
+
+def _ensure_rpr(run):
+    rpr = run.find(f"{W}rPr")
+    if rpr is None:
+        rpr = etree.Element(f"{W}rPr")
+        run.insert(0, rpr)
+    return rpr
+
+
+def _remove_rpr_child(rpr, local_name: str):
+    for child in list(rpr):
+        if child.tag == f"{W}{local_name}":
+            rpr.remove(child)
+
+
+def _remove_empty_rpr(run):
+    rpr = run.find(f"{W}rPr")
+    if rpr is not None and len(rpr) == 0 and not rpr.attrib:
+        run.remove(rpr)
