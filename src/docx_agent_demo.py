@@ -59,6 +59,13 @@ def tool_status(result: str) -> str:
     return "完成"
 
 
+def read_user_input(prompt: str) -> str | None:
+    user_input = input(prompt).strip()
+    if user_input.lower() in {"quit", "exit"}:
+        return None
+    return user_input
+
+
 SYSTEM_PROMPT = f"""
 你是一个精细 DOCX 编辑 agent。
 
@@ -74,6 +81,7 @@ SYSTEM_PROMPT = f"""
 9. 表格结构操作必须优先使用表格坐标工具：插入整行用 insert_table_row_after，清空单元格用 clear_table_cell，删除整行用 delete_table_row，替换单元格全部内容用 replace_table_cell_text。
 10. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
 11. 用户说“删除整行”时不要只删除行内文字；用户说“清空单元格”时不要删除行或单元格。
+12. 遇到长文档、大量编辑、需要仿照原文档排版或用户没有明确格式要求时，先调用 analyze_docx_style_samples，向用户展示样式样本并请求确认，再继续批量写入。
 
 工具说明：
 {render_tools_prompt()}
@@ -92,11 +100,16 @@ def main():
     print(f"运行日志: {log_path}")
     print("示例需求：")
     print("把 文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。")
+    print("输入 quit 或 exit 结束。")
     print("=" * 60)
 
-    user_input = input("请输入你的文档编辑需求：\n").strip()
-    if not user_input:
+    user_input = read_user_input("请输入你的文档编辑需求：\n")
+    while user_input == "":
         print("需求不能为空")
+        user_input = read_user_input("请输入你的文档编辑需求：\n")
+    if user_input is None:
+        append_log(log_path, "用户退出", {"phase": "before_first_request"})
+        print("已退出。")
         return
 
     append_log(
@@ -106,7 +119,6 @@ def main():
             "model": model,
             "thinking_type": thinking_type,
             "tool_count": len(TOOLS_SCHEMA),
-            "user_input": user_input,
         },
     )
 
@@ -205,7 +217,17 @@ def main():
         print("=" * 60)
         print(msg.content)
         append_log(log_path, "最终回复", msg.content)
-        break
+
+        user_input = read_user_input("\n请输入下一步需求，或输入 quit/exit 结束：\n")
+        while user_input == "":
+            print("输入为空；请输入下一步需求，或输入 quit/exit 结束。")
+            user_input = read_user_input("\n请输入下一步需求，或输入 quit/exit 结束：\n")
+        if user_input is None:
+            append_log(log_path, "用户退出", {"phase": "after_assistant_reply", "round_index": round_index})
+            print("已退出。")
+            break
+        append_log(log_path, "用户继续输入", user_input)
+        messages.append({"role": "user", "content": user_input})
 
 
 if __name__ == "__main__":
