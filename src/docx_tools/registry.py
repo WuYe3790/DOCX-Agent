@@ -1,5 +1,13 @@
 import json
 
+from md_tools.apply_markdown_ir_to_table_cell import (
+    apply_markdown_ir_to_table_cell,
+    tools_schema as apply_markdown_ir_to_table_cell_schema,
+)
+from md_tools.parse_markdown_draft import parse_markdown_draft, tools_schema as parse_markdown_draft_schema
+from md_tools.read_markdown_draft import read_markdown_draft, tools_schema as read_markdown_draft_schema
+from md_tools.write_markdown_draft import write_markdown_draft, tools_schema as write_markdown_draft_schema
+
 from .analyze_docx_style_samples import analyze_docx_style_samples, tools_schema as analyze_docx_style_samples_schema
 from .clear_table_cell import clear_table_cell, tools_schema as clear_table_cell_schema
 from .delete_text import delete_text, tools_schema as delete_text_schema
@@ -30,6 +38,10 @@ TOOLS = {
     "analyze_docx_style_samples": analyze_docx_style_samples,
     "read_docx_structure": read_docx_structure,
     "find_text": find_text,
+    "write_markdown_draft": write_markdown_draft,
+    "read_markdown_draft": read_markdown_draft,
+    "parse_markdown_draft": parse_markdown_draft,
+    "apply_markdown_ir_to_table_cell": apply_markdown_ir_to_table_cell,
     "replace_text_like_sample": replace_text_like_sample,
     "insert_paragraph_after_like_sample": insert_paragraph_after_like_sample,
     "replace_table_cell_like_sample": replace_table_cell_like_sample,
@@ -51,6 +63,10 @@ TOOLS_SCHEMA = [
     analyze_docx_style_samples_schema,
     read_docx_structure_schema,
     find_text_schema,
+    write_markdown_draft_schema,
+    read_markdown_draft_schema,
+    parse_markdown_draft_schema,
+    apply_markdown_ir_to_table_cell_schema,
     replace_text_like_sample_schema,
     insert_paragraph_after_like_sample_schema,
     replace_table_cell_like_sample_schema,

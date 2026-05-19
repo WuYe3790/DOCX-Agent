@@ -1,0 +1,59 @@
+from .common import json_result, parse_markdown_blocks, read_markdown_text
+
+
+def parse_markdown_draft(markdown_path: str) -> str:
+    """把 Markdown 草稿解析成简单 IR，供模型确认样式映射和目标位置。"""
+    try:
+        target, content = read_markdown_text(markdown_path)
+    except (FileNotFoundError, ValueError) as exc:
+        return json_result({"status": "error", "message": str(exc)})
+
+    blocks = parse_markdown_blocks(content)
+    unsupported = [block for block in blocks if not block.get("supported", True)]
+    type_counts = {}
+    for block in blocks:
+        block_type = block["type"]
+        type_counts[block_type] = type_counts.get(block_type, 0) + 1
+
+    return json_result(
+        {
+            "status": "ok",
+            "markdown_path": str(target),
+            "block_count": len(blocks),
+            "type_counts": type_counts,
+            "unsupported_block_count": len(unsupported),
+            "unsupported_blocks": [
+                {
+                    "block_id": block["block_id"],
+                    "type": block["type"],
+                    "line_start": block["line_start"],
+                    "line_end": block["line_end"],
+                    "raw": block["raw"],
+                }
+                for block in unsupported
+            ],
+            "blocks": blocks,
+            "style_mapping_hint": {
+                "heading1": "章节标题样本，如 S002",
+                "heading2": "子标题样本，如 S004",
+                "paragraph": "正文样本，如 S001",
+                "list_item": "正文样本，如 S001",
+            },
+        }
+    )
+
+
+tools_schema = {
+    "type": "function",
+    "function": {
+        "name": "parse_markdown_draft",
+        "description": "把 out/drafts 中的 Markdown 草稿解析成 IR。只做语法识别，不决定 Word 样式；模型需要基于 IR 决定 style_mapping。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "markdown_path": {"type": "string", "description": "Markdown 草稿路径，必须位于 out/drafts"},
+            },
+            "required": ["markdown_path"],
+        },
+    },
+}

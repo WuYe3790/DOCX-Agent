@@ -10,19 +10,20 @@ from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 
 
 STYLE_REVIEW = "style_review"
-EDITING = "editing"
+MD_DRAFT = "md_draft"
+WORD_EDITING = "word_editing"
 REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure"}
-EDITING_TOOL_NAMES = {
+MD_DRAFT_TOOL_NAMES = {
+    "write_markdown_draft",
+    "read_markdown_draft",
+    "parse_markdown_draft",
+}
+WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
-    "find_text",
-    "replace_text_like_sample",
-    "insert_paragraph_after_like_sample",
-    "replace_table_cell_like_sample",
-    "insert_table_row_after",
-    "clear_table_cell",
-    "delete_table_row",
+    "read_markdown_draft",
+    "parse_markdown_draft",
+    "apply_markdown_ir_to_table_cell",
     "diff_docx",
-    "unzip_docx",
 }
 
 
@@ -98,8 +99,10 @@ def read_yes_no(prompt: str) -> bool | None:
 def tool_schemas_for_state(state: str):
     if state == STYLE_REVIEW:
         allowed = REVIEW_TOOL_NAMES
-        return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
-    allowed = EDITING_TOOL_NAMES
+    elif state == MD_DRAFT:
+        allowed = MD_DRAFT_TOOL_NAMES
+    else:
+        allowed = WORD_EDITING_TOOL_NAMES
     return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
 
 
@@ -116,12 +119,23 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id，并请用户确认或修正。
 用户没有确认前，不要进行任何写入、替换、删除或 diff。
 """.strip()
+    elif state == MD_DRAFT:
+        state_rule = """
+当前状态：Markdown 草稿。
+你现在只能生成、读取和解析 Markdown 草稿，不能编辑 docx。
+请先用 write_markdown_draft 把要写入 Word 的长内容保存到 out/drafts。
+写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
+用户没有确认 Markdown 草稿前，不要尝试写入 Word。
+""".strip()
     else:
         state_rule = """
-当前状态：编辑执行。
-用户已经完成或跳过样式审核。你可以使用当前可见工具完成文档编辑。
-编辑前仍应读取结构或查找锚点；编辑后必须调用 diff_docx 验证变化。
-格式敏感的文本替换、段落插入、表格单元格替换，优先使用 *_like_sample 工具，并传入样式审核阶段生成的 style_profile_path 和用户确认的 sample_id。
+当前状态：Word 写入。
+用户已经确认 Markdown 草稿。你现在只能读取 Word 结构、读取/解析 Markdown、按 style_mapping 写入 Word，并用 diff_docx 验证。
+不要调用直接文本替换、段落插入、表格直接替换等工具；当前状态也不会暴露这些工具。
+写入前必须用 read_docx_structure 确认目标表格坐标，并用 parse_markdown_draft 确认 Markdown IR。
+然后由你基于样式审核结果选择 style_mapping，调用 apply_markdown_ir_to_table_cell 写入 Word。
+style_mapping 示例：heading1=章节标题样本，heading2=子标题样本，paragraph/list_item=正文样本。
+写入后必须调用 diff_docx 验证变化。
 """.strip()
 
     return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
@@ -135,14 +149,9 @@ SYSTEM_PROMPT = f"""
 2. 插入文字时优先保留原 run 格式。
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
-5. 一次工具调用尽量只替换或写入一行内容；如果要写多段正文，优先用 replace_text 写第一段，再用 insert_paragraph_after 逐段追加。
-6. 如果用户给出的内容本身包含换行，必须使用支持 newline_mode 的工具，并优先选择 newline_mode="paragraphs"，不要把长正文塞进单个 run。
-7. 替换蓝色提示、占位符、高亮说明为正式正文时，使用 format_policy="body"；替换标题占位但希望保留标题样式时，使用 format_policy="preserve"。
-8. 需要局部加粗、改颜色、改字号时，优先使用 set_text_format；如果写入时已经知道格式，也可以在写入工具中使用 format_policy="custom"。
-9. 表格结构操作必须优先使用表格坐标工具：插入整行用 insert_table_row_after，清空单元格用 clear_table_cell，删除整行用 delete_table_row，替换单元格全部内容用 replace_table_cell_text。
-10. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
-11. 用户说“删除整行”时不要只删除行内文字；用户说“清空单元格”时不要删除行或单元格。
-12. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
+5. 长内容生成先写 Markdown 草稿到 out/drafts，再解析 Markdown IR，由模型决定 style_mapping 和目标位置，最后调用 Markdown 到 Word 的渲染工具。
+6. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
+7. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
 
@@ -299,16 +308,33 @@ def main():
                 print("已退出。")
                 break
             if approved:
-                workflow_state = EDITING
+                workflow_state = MD_DRAFT
                 append_log(log_path, "状态切换", {"to": workflow_state, "reason": "user_approved_style_review"})
-                print("已进入编辑阶段。")
-                continue_message = "用户已确认样式审核结果。请基于最初任务、已确认的样式样本和当前上下文，继续执行文档编辑；编辑完成后调用 diff_docx 验证。"
-                append_log(log_path, "自动继续编辑", continue_message)
+                print("已进入 Markdown 草稿阶段。")
+                continue_message = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
+                append_log(log_path, "自动继续 Markdown 草稿", continue_message)
                 messages.append({"role": "user", "content": continue_message})
                 continue
             else:
                 append_log(log_path, "样式审核未通过", {"round_index": round_index})
                 user_input = read_user_input("\n请补充你的样式审核建议，或输入 quit/exit 结束：\n")
+        elif workflow_state == MD_DRAFT:
+            approved = read_yes_no("\n是否确认 Markdown 草稿并进入 Word 写入阶段？输入 Y 继续，N 留在草稿阶段：\n")
+            if approved is None:
+                append_log(log_path, "用户退出", {"phase": "md_draft_approval", "round_index": round_index})
+                print("已退出。")
+                break
+            if approved:
+                workflow_state = WORD_EDITING
+                append_log(log_path, "状态切换", {"to": workflow_state, "reason": "user_approved_markdown_draft"})
+                print("已进入 Word 写入阶段。")
+                continue_message = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，调用 apply_markdown_ir_to_table_cell 写入 Word，最后调用 diff_docx 验证。"
+                append_log(log_path, "自动继续 Word 写入", continue_message)
+                messages.append({"role": "user", "content": continue_message})
+                continue
+            else:
+                append_log(log_path, "Markdown 草稿未通过", {"round_index": round_index})
+                user_input = read_user_input("\n请补充你的 Markdown 草稿修改建议，或输入 quit/exit 结束：\n")
         else:
             user_input = read_user_input("\n请输入下一步需求，或输入 quit/exit 结束：\n")
 
