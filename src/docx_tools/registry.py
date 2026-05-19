@@ -7,11 +7,20 @@ from .delete_table_row import delete_table_row, tools_schema as delete_table_row
 from .diff_docx import diff_docx, tools_schema as diff_docx_schema
 from .find_text import find_text, tools_schema as find_text_schema
 from .insert_paragraph_after import insert_paragraph_after, tools_schema as insert_paragraph_after_schema
+from .insert_paragraph_after_like_sample import (
+    insert_paragraph_after_like_sample,
+    tools_schema as insert_paragraph_after_like_sample_schema,
+)
 from .insert_table_row_after import insert_table_row_after, tools_schema as insert_table_row_after_schema
 from .insert_text_at import insert_text_at, tools_schema as insert_text_at_schema
 from .insert_text_in_table_cell import insert_text_in_table_cell, tools_schema as insert_text_in_table_cell_schema
 from .read_docx_structure import read_docx_structure, tools_schema as read_docx_structure_schema
+from .replace_table_cell_like_sample import (
+    replace_table_cell_like_sample,
+    tools_schema as replace_table_cell_like_sample_schema,
+)
 from .replace_table_cell_text import replace_table_cell_text, tools_schema as replace_table_cell_text_schema
+from .replace_text_like_sample import replace_text_like_sample, tools_schema as replace_text_like_sample_schema
 from .replace_text import replace_text, tools_schema as replace_text_schema
 from .set_text_format import set_text_format, tools_schema as set_text_format_schema
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
@@ -21,6 +30,9 @@ TOOLS = {
     "analyze_docx_style_samples": analyze_docx_style_samples,
     "read_docx_structure": read_docx_structure,
     "find_text": find_text,
+    "replace_text_like_sample": replace_text_like_sample,
+    "insert_paragraph_after_like_sample": insert_paragraph_after_like_sample,
+    "replace_table_cell_like_sample": replace_table_cell_like_sample,
     "insert_text_at": insert_text_at,
     "insert_text_in_table_cell": insert_text_in_table_cell,
     "insert_table_row_after": insert_table_row_after,
@@ -39,6 +51,9 @@ TOOLS_SCHEMA = [
     analyze_docx_style_samples_schema,
     read_docx_structure_schema,
     find_text_schema,
+    replace_text_like_sample_schema,
+    insert_paragraph_after_like_sample_schema,
+    replace_table_cell_like_sample_schema,
     insert_text_at_schema,
     insert_text_in_table_cell_schema,
     insert_table_row_after_schema,

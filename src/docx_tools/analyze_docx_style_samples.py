@@ -1,5 +1,7 @@
 import re
 from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 from .common import (
     NS,
@@ -17,6 +19,7 @@ from .common import (
 
 def analyze_docx_style_samples(
     docx_path: str,
+    output_profile_path: str = "",
     max_samples: int = 16,
     examples_per_sample: int = 4,
 ) -> str:
@@ -87,19 +90,32 @@ def analyze_docx_style_samples(
             }
         )
 
-    return json_result(
-        {
-            "status": "ok",
-            "docx_path": docx_path,
-            "needs_user_review": True,
-            "style_samples": style_samples,
-            "review_instructions": [
-                "这些 sample_id 只是候选格式样本，不是最终样式决策。",
-                "请让用户确认哪些 sample_id 对应正文、章节标题、表格字段名、表格填写值、占位提示等角色。",
-                "大规模写入前，优先按用户确认的 sample_id 仿写格式，避免把正文写成标题或加粗格式。",
-            ],
-        }
-    )
+    result = {
+        "status": "ok",
+        "docx_path": docx_path,
+        "needs_user_review": True,
+        "style_profile_path": "",
+        "style_samples": style_samples,
+        "review_instructions": [
+            "这些 sample_id 只是候选格式样本，不是最终样式决策。",
+            "请让用户确认哪些 sample_id 对应正文、章节标题、表格字段名、表格填写值、占位提示等角色。",
+            "大规模写入前，优先按用户确认的 sample_id 仿写格式，避免把正文写成标题或加粗格式。",
+        ],
+    }
+    profile_path = _resolve_profile_path(docx_path, output_profile_path)
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(json_result(result), encoding="utf-8")
+    result["style_profile_path"] = str(profile_path)
+    profile_path.write_text(json_result(result), encoding="utf-8")
+    return json_result(result)
+
+
+def _resolve_profile_path(docx_path: str, output_profile_path: str) -> Path:
+    if output_profile_path:
+        return Path(output_profile_path)
+    stem = Path(docx_path).stem
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("out") / "style_profiles" / f"{stem}_{timestamp}.json"
 
 
 def _dominant_run_format(paragraph):
@@ -261,6 +277,10 @@ tools_schema = {
             "type": "object",
             "properties": {
                 "docx_path": {"type": "string", "description": "要分析的 .docx 文件路径"},
+                "output_profile_path": {
+                    "type": "string",
+                    "description": "可选，样式画像 JSON 输出路径；默认写入 out/style_profiles/文档名_时间戳.json",
+                },
                 "max_samples": {"type": "integer", "description": "最多返回多少组格式样本，默认 16"},
                 "examples_per_sample": {"type": "integer", "description": "每组格式最多返回多少个示例文本，默认 4"},
             },

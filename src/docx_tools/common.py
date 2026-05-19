@@ -514,6 +514,79 @@ def apply_custom_run_format(
     _remove_empty_rpr(run)
 
 
+def apply_sample_format_to_paragraph(paragraph, style_sample: dict):
+    """把样式样本中的段落属性和 run 属性应用到段落。"""
+    apply_sample_paragraph_format(paragraph, style_sample)
+    for run in paragraph.xpath("./w:r", namespaces=NS):
+        apply_sample_format_to_run(run, style_sample)
+
+
+def apply_sample_paragraph_format(paragraph, style_sample: dict):
+    paragraph_format = style_sample.get("paragraph_format") or {}
+    style_id = paragraph_format.get("style_id")
+    alignment = paragraph_format.get("alignment")
+    if style_id is None and alignment is None:
+        return
+    ppr = paragraph.find(f"{W}pPr")
+    if ppr is None:
+        ppr = etree.Element(f"{W}pPr")
+        paragraph.insert(0, ppr)
+    _remove_ppr_child(ppr, "pStyle")
+    _remove_ppr_child(ppr, "jc")
+    if style_id:
+        elem = etree.Element(f"{W}pStyle")
+        elem.set(f"{W}val", style_id)
+        ppr.append(elem)
+    if alignment:
+        elem = etree.Element(f"{W}jc")
+        elem.set(f"{W}val", alignment)
+        ppr.append(elem)
+
+
+def apply_sample_format_to_run(run, style_sample: dict):
+    fmt = style_sample.get("format") or {}
+    rpr = _ensure_rpr(run)
+    for tag in ("b", "bCs", "i", "iCs", "color", "highlight", "sz", "szCs", "rFonts"):
+        _remove_rpr_child(rpr, tag)
+
+    fonts = etree.Element(f"{W}rFonts")
+    has_fonts = False
+    if fmt.get("font_ascii"):
+        fonts.set(f"{W}ascii", fmt["font_ascii"])
+        fonts.set(f"{W}hAnsi", fmt["font_ascii"])
+        has_fonts = True
+    if fmt.get("font_east_asia"):
+        fonts.set(f"{W}eastAsia", fmt["font_east_asia"])
+        has_fonts = True
+    if has_fonts:
+        rpr.append(fonts)
+
+    if fmt.get("bold"):
+        rpr.append(etree.Element(f"{W}b"))
+    if fmt.get("bold_cs"):
+        rpr.append(etree.Element(f"{W}bCs"))
+    if fmt.get("italic"):
+        rpr.append(etree.Element(f"{W}i"))
+        rpr.append(etree.Element(f"{W}iCs"))
+    if fmt.get("color"):
+        elem = etree.Element(f"{W}color")
+        elem.set(f"{W}val", fmt["color"])
+        rpr.append(elem)
+    if fmt.get("highlight"):
+        elem = etree.Element(f"{W}highlight")
+        elem.set(f"{W}val", fmt["highlight"])
+        rpr.append(elem)
+    if fmt.get("font_size_half_points"):
+        elem = etree.Element(f"{W}sz")
+        elem.set(f"{W}val", str(fmt["font_size_half_points"]))
+        rpr.append(elem)
+    if fmt.get("font_size_cs_half_points"):
+        elem = etree.Element(f"{W}szCs")
+        elem.set(f"{W}val", str(fmt["font_size_cs_half_points"]))
+        rpr.append(elem)
+    _remove_empty_rpr(run)
+
+
 def set_run_color(run, color: str | None):
     rpr = _ensure_rpr(run)
     _remove_rpr_child(rpr, "color")
@@ -554,6 +627,12 @@ def _remove_rpr_child(rpr, local_name: str):
     for child in list(rpr):
         if child.tag == f"{W}{local_name}":
             rpr.remove(child)
+
+
+def _remove_ppr_child(ppr, local_name: str):
+    for child in list(ppr):
+        if child.tag == f"{W}{local_name}":
+            ppr.remove(child)
 
 
 def _remove_empty_rpr(run):

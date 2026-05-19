@@ -12,6 +12,18 @@ from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 STYLE_REVIEW = "style_review"
 EDITING = "editing"
 REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure"}
+EDITING_TOOL_NAMES = {
+    "read_docx_structure",
+    "find_text",
+    "replace_text_like_sample",
+    "insert_paragraph_after_like_sample",
+    "replace_table_cell_like_sample",
+    "insert_table_row_after",
+    "clear_table_cell",
+    "delete_table_row",
+    "diff_docx",
+    "unzip_docx",
+}
 
 
 def load_config():
@@ -87,7 +99,8 @@ def tool_schemas_for_state(state: str):
     if state == STYLE_REVIEW:
         allowed = REVIEW_TOOL_NAMES
         return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
-    return TOOLS_SCHEMA
+    allowed = EDITING_TOOL_NAMES
+    return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
 
 
 def tool_names(tool_schemas) -> set[str]:
@@ -108,6 +121,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 当前状态：编辑执行。
 用户已经完成或跳过样式审核。你可以使用当前可见工具完成文档编辑。
 编辑前仍应读取结构或查找锚点；编辑后必须调用 diff_docx 验证变化。
+格式敏感的文本替换、段落插入、表格单元格替换，优先使用 *_like_sample 工具，并传入样式审核阶段生成的 style_profile_path 和用户确认的 sample_id。
 """.strip()
 
     return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
@@ -288,7 +302,10 @@ def main():
                 workflow_state = EDITING
                 append_log(log_path, "状态切换", {"to": workflow_state, "reason": "user_approved_style_review"})
                 print("已进入编辑阶段。")
-                user_input = read_user_input("\n请输入下一步编辑需求，或输入 quit/exit 结束：\n")
+                continue_message = "用户已确认样式审核结果。请基于最初任务、已确认的样式样本和当前上下文，继续执行文档编辑；编辑完成后调用 diff_docx 验证。"
+                append_log(log_path, "自动继续编辑", continue_message)
+                messages.append({"role": "user", "content": continue_message})
+                continue
             else:
                 append_log(log_path, "样式审核未通过", {"round_index": round_index})
                 user_input = read_user_input("\n请补充你的样式审核建议，或输入 quit/exit 结束：\n")
