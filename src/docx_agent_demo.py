@@ -15,6 +15,9 @@ REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure"}
 EDITING_TOOL_NAMES = {
     "read_docx_structure",
     "find_text",
+    "replace_text_with_styled_paragraphs",
+    "insert_paragraphs_after_with_samples",
+    "replace_table_cell_with_styled_paragraphs",
     "replace_text_like_sample",
     "insert_paragraph_after_like_sample",
     "replace_table_cell_like_sample",
@@ -122,6 +125,8 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 用户已经完成或跳过样式审核。你可以使用当前可见工具完成文档编辑。
 编辑前仍应读取结构或查找锚点；编辑后必须调用 diff_docx 验证变化。
 格式敏感的文本替换、段落插入、表格单元格替换，优先使用 *_like_sample 工具，并传入样式审核阶段生成的 style_profile_path 和用户确认的 sample_id。
+如果要写入标题、子标题、正文混合的多段内容，必须优先使用 replace_text_with_styled_paragraphs、insert_paragraphs_after_with_samples 或 replace_table_cell_with_styled_paragraphs，并在 paragraphs 数组里给每一段分别指定 sample_id。
+不要把多级标题和正文合成一个 new_text 后只传一个 sample_id；单 sample_id 工具只适合单句、单段或同一种格式的内容。
 """.strip()
 
     return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
@@ -135,7 +140,7 @@ SYSTEM_PROMPT = f"""
 2. 插入文字时优先保留原 run 格式。
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
-5. 一次工具调用尽量只替换或写入一行内容；如果要写多段正文，优先用 replace_text 写第一段，再用 insert_paragraph_after 逐段追加。
+5. 写多段内容时，优先使用结构化多段工具，并在 paragraphs 数组中给每段分别指定 sample_id；只有单句、单段或全段同一种格式时才使用单 sample_id 工具。
 6. 如果用户给出的内容本身包含换行，必须使用支持 newline_mode 的工具，并优先选择 newline_mode="paragraphs"，不要把长正文塞进单个 run。
 7. 替换蓝色提示、占位符、高亮说明为正式正文时，使用 format_policy="body"；替换标题占位但希望保留标题样式时，使用 format_policy="preserve"。
 8. 需要局部加粗、改颜色、改字号时，优先使用 set_text_format；如果写入时已经知道格式，也可以在写入工具中使用 format_policy="custom"。
@@ -143,6 +148,7 @@ SYSTEM_PROMPT = f"""
 10. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
 11. 用户说“删除整行”时不要只删除行内文字；用户说“清空单元格”时不要删除行或单元格。
 12. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
+13. 标题、子标题、正文混合时，不要用一个 sample_id 写整块内容；必须拆成 paragraphs 数组，例如章节标题用章节标题样本，子标题用子标题样本，普通说明用正文样本。
 """.strip()
 
 
