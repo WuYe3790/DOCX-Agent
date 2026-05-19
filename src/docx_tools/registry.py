@@ -11,10 +11,6 @@ from .insert_paragraph_after_like_sample import (
     insert_paragraph_after_like_sample,
     tools_schema as insert_paragraph_after_like_sample_schema,
 )
-from .insert_paragraphs_after_with_samples import (
-    insert_paragraphs_after_with_samples,
-    tools_schema as insert_paragraphs_after_with_samples_schema,
-)
 from .insert_table_row_after import insert_table_row_after, tools_schema as insert_table_row_after_schema
 from .insert_text_at import insert_text_at, tools_schema as insert_text_at_schema
 from .insert_text_in_table_cell import insert_text_in_table_cell, tools_schema as insert_text_in_table_cell_schema
@@ -23,15 +19,7 @@ from .replace_table_cell_like_sample import (
     replace_table_cell_like_sample,
     tools_schema as replace_table_cell_like_sample_schema,
 )
-from .replace_table_cell_with_styled_paragraphs import (
-    replace_table_cell_with_styled_paragraphs,
-    tools_schema as replace_table_cell_with_styled_paragraphs_schema,
-)
 from .replace_table_cell_text import replace_table_cell_text, tools_schema as replace_table_cell_text_schema
-from .replace_text_with_styled_paragraphs import (
-    replace_text_with_styled_paragraphs,
-    tools_schema as replace_text_with_styled_paragraphs_schema,
-)
 from .replace_text_like_sample import replace_text_like_sample, tools_schema as replace_text_like_sample_schema
 from .replace_text import replace_text, tools_schema as replace_text_schema
 from .set_text_format import set_text_format, tools_schema as set_text_format_schema
@@ -45,9 +33,6 @@ TOOLS = {
     "replace_text_like_sample": replace_text_like_sample,
     "insert_paragraph_after_like_sample": insert_paragraph_after_like_sample,
     "replace_table_cell_like_sample": replace_table_cell_like_sample,
-    "replace_text_with_styled_paragraphs": replace_text_with_styled_paragraphs,
-    "insert_paragraphs_after_with_samples": insert_paragraphs_after_with_samples,
-    "replace_table_cell_with_styled_paragraphs": replace_table_cell_with_styled_paragraphs,
     "insert_text_at": insert_text_at,
     "insert_text_in_table_cell": insert_text_in_table_cell,
     "insert_table_row_after": insert_table_row_after,
@@ -69,9 +54,6 @@ TOOLS_SCHEMA = [
     replace_text_like_sample_schema,
     insert_paragraph_after_like_sample_schema,
     replace_table_cell_like_sample_schema,
-    replace_text_with_styled_paragraphs_schema,
-    insert_paragraphs_after_with_samples_schema,
-    replace_table_cell_with_styled_paragraphs_schema,
     insert_text_at_schema,
     insert_text_in_table_cell_schema,
     insert_table_row_after_schema,
