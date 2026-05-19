@@ -10,6 +10,8 @@ try:
         insert_paragraphs_after,
         json_result,
         load_document_xml,
+        NS,
+        set_run_bold,
         table_summary,
         write_document_xml,
     )
@@ -26,6 +28,8 @@ except ModuleNotFoundError:
         insert_paragraphs_after,
         json_result,
         load_document_xml,
+        NS,
+        set_run_bold,
         table_summary,
         write_document_xml,
     )
@@ -121,15 +125,14 @@ def apply_markdown_ir_to_table_cell(
     first_item = render_items[0]
     first_sample = load_style_sample(style_profile_path, first_item["sample_id"])
     paragraph = clear_cell_to_empty_paragraph(cell)
-    append_run_to_paragraph(paragraph, first_item["text"])
-    apply_sample_format_to_paragraph(paragraph, first_sample)
+    _write_inline_markdown_to_paragraph(paragraph, first_item["text"], first_sample)
 
     current = paragraph
     for item in render_items[1:]:
-        insert_paragraphs_after(current, [item["text"]], style_paragraph=current)
+        insert_paragraphs_after(current, [""], style_paragraph=current)
         current = current.getnext()
         sample = load_style_sample(style_profile_path, item["sample_id"])
-        apply_sample_format_to_paragraph(current, sample)
+        _write_inline_markdown_to_paragraph(current, item["text"], sample)
 
     after_text = cell_text(cell)
     write_document_xml(docx_path, output_path, root)
@@ -189,6 +192,45 @@ def _render_text(block: dict) -> str:
         marker = block.get("marker") or "-"
         return f"{marker} {block['text']}"
     return block["text"]
+
+
+def _write_inline_markdown_to_paragraph(paragraph, text: str, style_sample: dict) -> None:
+    """写入段落文本，并把 **加粗** 转成 Word run 加粗。"""
+    for run in list(paragraph.xpath("./w:r", namespaces=NS)):
+        paragraph.remove(run)
+
+    segments = _parse_bold_segments(text)
+    run_records = []
+    for value, is_bold in segments:
+        if not value:
+            continue
+        run = append_run_to_paragraph(paragraph, value)
+        run_records.append((run, is_bold))
+
+    apply_sample_format_to_paragraph(paragraph, style_sample)
+    for run, is_bold in run_records:
+        if is_bold:
+            set_run_bold(run, True)
+
+
+def _parse_bold_segments(text: str) -> list[tuple[str, bool]]:
+    """解析最小 Markdown 加粗语法；未闭合的 ** 按普通文本处理。"""
+    result = []
+    cursor = 0
+    while cursor < len(text):
+        start = text.find("**", cursor)
+        if start == -1:
+            result.append((text[cursor:], False))
+            break
+        if start > cursor:
+            result.append((text[cursor:start], False))
+        end = text.find("**", start + 2)
+        if end == -1:
+            result.append((text[start:], False))
+            break
+        result.append((text[start + 2 : end], True))
+        cursor = end + 2
+    return result
 
 
 tools_schema = {

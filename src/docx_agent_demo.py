@@ -42,7 +42,7 @@ def build_client():
     config = load_config()
     api_key = os.getenv("DEEPSEEK_API_KEY") or config.get("api_key", "")
     base_url = config.get("base_url", "https://api.deepseek.com")
-    timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", config.get("timeout_seconds", 60)))
+    timeout = float(config.get("timeout_seconds", 300))
     if not api_key:
         raise RuntimeError("请设置 OPENAI_API_KEY/DEEPSEEK_API_KEY，或在 src/config.json 中配置 api_key")
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0,)
@@ -127,7 +127,8 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 当前状态：Markdown 草稿。
 你现在只能生成、读取和解析 Markdown 草稿，不能编辑 docx。
 请用 write_markdown_draft 按目标位置拆分 Markdown 片段，保存到 out/drafts；不要写成包含全流程说明的单个自由草稿。
-建议每个目标单元格一个 Markdown 文件，例如 cover_course.md、experiment_name.md、flowchart_placeholder.md、process_discussion.md。
+长正文块单独生成 Markdown 文件，例如 experiment_platform.md、flowchart_placeholder.md、process_discussion.md。
+简单字段不要每格一个 Markdown 文件；可以合并成一个字段计划文件，例如 cover_fields.md，列出课程名称、学院、专业班级、任课教师等字段和值。实际写入时再按字段拆成更小片段或直接清空结构字段。
 每个片段只写最终要进入 Word 的内容，不要写“保留原内容”“删除整行”“备注”“格式说明”等编辑计划。
 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
 用户没有确认 Markdown 草稿前，不要尝试写入 Word。
