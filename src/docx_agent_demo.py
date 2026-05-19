@@ -38,6 +38,9 @@ SYSTEM_PROMPT = f"""
 6. 如果用户给出的内容本身包含换行，必须使用支持 newline_mode 的工具，并优先选择 newline_mode="paragraphs"，不要把长正文塞进单个 run。
 7. 替换蓝色提示、占位符、高亮说明为正式正文时，使用 format_policy="body"；替换标题占位但希望保留标题样式时，使用 format_policy="preserve"。
 8. 需要局部加粗、改颜色、改字号时，优先使用 set_text_format；如果写入时已经知道格式，也可以在写入工具中使用 format_policy="custom"。
+9. 表格结构操作必须优先使用表格坐标工具：插入整行用 insert_table_row_after，清空单元格用 clear_table_cell，删除整行用 delete_table_row，替换单元格全部内容用 replace_table_cell_text。
+10. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
+11. 用户说“删除整行”时不要只删除行内文字；用户说“清空单元格”时不要删除行或单元格。
 
 工具说明：
 {render_tools_prompt()}

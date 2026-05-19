@@ -93,6 +93,89 @@ def tables(document_root):
     return document_root.xpath("//w:tbl", namespaces=NS)
 
 
+def table_rows(table):
+    return table.xpath("./w:tr", namespaces=NS)
+
+
+def row_cells(row):
+    return row.xpath("./w:tc", namespaces=NS)
+
+
+def cell_paragraphs(cell):
+    return cell.xpath("./w:p", namespaces=NS)
+
+
+def cell_text(cell) -> str:
+    return "".join(t.text or "" for t in cell.xpath(".//w:t", namespaces=NS))
+
+
+def row_text(row) -> str:
+    return "".join(cell_text(cell) for cell in row_cells(row))
+
+
+def get_table_by_index(document_root, table_index: int):
+    all_tables = tables(document_root)
+    if table_index < 1 or table_index > len(all_tables):
+        raise IndexError(f"table_index out of range: {table_index}, table_count={len(all_tables)}")
+    return all_tables[table_index - 1]
+
+
+def get_row_by_index(table, row_index: int):
+    rows = table_rows(table)
+    if row_index < 1 or row_index > len(rows):
+        raise IndexError(f"row_index out of range: {row_index}, row_count={len(rows)}")
+    return rows[row_index - 1]
+
+
+def get_cell_by_index(row, cell_index: int):
+    cells = row_cells(row)
+    if cell_index < 1 or cell_index > len(cells):
+        raise IndexError(f"cell_index out of range: {cell_index}, cell_count={len(cells)}")
+    return cells[cell_index - 1]
+
+
+def table_summary(table):
+    return {
+        "row_count": len(table_rows(table)),
+        "rows": [
+            {
+                "row_index": row_index,
+                "text": row_text(row),
+                "cells": [cell_text(cell) for cell in row_cells(row)],
+            }
+            for row_index, row in enumerate(table_rows(table), start=1)
+        ],
+    }
+
+
+def clear_cell_to_empty_paragraph(cell):
+    """清空单元格内容，保留 tcPr，并确保至少有一个空段落。"""
+    existing_paragraphs = cell_paragraphs(cell)
+    source_ppr = None
+    if existing_paragraphs:
+        ppr = existing_paragraphs[0].find(f"{W}pPr")
+        if ppr is not None:
+            source_ppr = copy.deepcopy(ppr)
+
+    for child in list(cell):
+        if child.tag != f"{W}tcPr":
+            cell.remove(child)
+
+    paragraph = etree.Element(f"{W}p", nsmap=cell.nsmap)
+    if source_ppr is not None:
+        paragraph.append(source_ppr)
+    cell.append(paragraph)
+    return paragraph
+
+
+def first_text_run(element):
+    for run in element.xpath(".//w:r", namespaces=NS):
+        if "".join(t.text or "" for t in run.xpath(".//w:t", namespaces=NS)):
+            return run
+    runs = element.xpath(".//w:r", namespaces=NS)
+    return runs[0] if runs else None
+
+
 def element_index_among_same_tag(element) -> int:
     parent = element.getparent()
     if parent is None:
