@@ -7,4 +7,5 @@ src/config.json
 venv/
 
 # 本地工具测试输出
+out/
 文档格式测试/cases/tool_demo/
