@@ -4,6 +4,7 @@ from md_tools.apply_markdown_ir_to_table_cell import (
     apply_markdown_ir_to_table_cell,
     tools_schema as apply_markdown_ir_to_table_cell_schema,
 )
+from md_tools.markdown_to_word import markdown_to_word, tools_schema as markdown_to_word_schema
 from md_tools.parse_markdown_draft import parse_markdown_draft, tools_schema as parse_markdown_draft_schema
 from md_tools.read_markdown_draft import read_markdown_draft, tools_schema as read_markdown_draft_schema
 from md_tools.write_markdown_draft import write_markdown_draft, tools_schema as write_markdown_draft_schema
@@ -47,6 +48,7 @@ TOOLS = {
     "read_markdown_draft": read_markdown_draft,
     "parse_markdown_draft": parse_markdown_draft,
     "apply_markdown_ir_to_table_cell": apply_markdown_ir_to_table_cell,
+    "markdown_to_word": markdown_to_word,
     "replace_text_like_sample": replace_text_like_sample,
     "insert_paragraph_after_like_sample": insert_paragraph_after_like_sample,
     "replace_table_cell_like_sample": replace_table_cell_like_sample,
@@ -77,6 +79,7 @@ TOOLS_SCHEMA = [
     read_markdown_draft_schema,
     parse_markdown_draft_schema,
     apply_markdown_ir_to_table_cell_schema,
+    markdown_to_word_schema,
     replace_text_like_sample_schema,
     insert_paragraph_after_like_sample_schema,
     replace_table_cell_like_sample_schema,
