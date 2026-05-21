@@ -1,9 +1,9 @@
 from lxml import etree
 
 try:
-    from docx_tools.common import NS, W, XML, set_text_preserve_space
+    from docx_tools.common import NS, W, set_text_preserve_space
 except ModuleNotFoundError:
-    from src.docx_tools.common import NS, W, XML, set_text_preserve_space
+    from src.docx_tools.common import NS, W, set_text_preserve_space
 
 
 NON_TEXT_RUN_CHILDREN = {f"{W}tab", f"{W}br", f"{W}drawing", f"{W}pict", f"{W}object"}

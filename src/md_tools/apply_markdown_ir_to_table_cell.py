@@ -1,7 +1,6 @@
 try:
     from docx_tools.common import (
         cell_text,
-        clear_cell_to_empty_paragraph,
         get_cell_by_index,
         get_row_by_index,
         get_table_by_index,
@@ -16,7 +15,6 @@ try:
 except ModuleNotFoundError:
     from src.docx_tools.common import (
         cell_text,
-        clear_cell_to_empty_paragraph,
         get_cell_by_index,
         get_row_by_index,
         get_table_by_index,
@@ -105,7 +103,6 @@ def apply_markdown_ir_to_table_cell(
     before_text = cell_text(cell)
     layout_blocks = _items_to_layout_ir(render_items)
 
-    clear_cell_to_empty_paragraph(cell)
     render_blocks_to_container(cell, layout_blocks, style_samples=style_samples, clear_existing=True)
 
     after_text = cell_text(cell)
