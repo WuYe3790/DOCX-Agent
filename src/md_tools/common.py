@@ -2,6 +2,11 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from markdown_it import MarkdownIt
+except ModuleNotFoundError:
+    MarkdownIt = None
+
 
 DRAFT_ROOT = Path("out") / "drafts"
 
@@ -34,6 +39,96 @@ def read_markdown_text(path: str) -> tuple[Path, str]:
 
 
 def parse_markdown_blocks(markdown_text: str) -> list[dict]:
+    if MarkdownIt is not None:
+        return _parse_markdown_blocks_with_markdown_it(markdown_text)
+    return _parse_markdown_blocks_legacy(markdown_text)
+
+
+def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
+    normalized = markdown_text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    parser = MarkdownIt("commonmark").enable("table")
+    tokens = parser.parse(normalized)
+    blocks = []
+    list_stack = []
+    index = 0
+
+    while index < len(tokens):
+        token = tokens[index]
+
+        if token.type in {"bullet_list_open", "ordered_list_open"}:
+            list_stack.append(_list_marker(token))
+            index += 1
+            continue
+
+        if token.type in {"bullet_list_close", "ordered_list_close"}:
+            if list_stack:
+                list_stack.pop()
+            index += 1
+            continue
+
+        if token.type == "heading_open":
+            inline = _next_inline(tokens, index)
+            level = int(token.tag[1:]) if token.tag.startswith("h") and token.tag[1:].isdigit() else 2
+            block_type = "heading1" if level == 1 else "heading2"
+            blocks.append(
+                _block_from_token(
+                    block_type,
+                    _inline_text(inline),
+                    token,
+                    lines,
+                    heading_level=level,
+                )
+            )
+            index = _skip_until(tokens, index, "heading_close") + 1
+            continue
+
+        if token.type == "paragraph_open":
+            inline = _next_inline(tokens, index)
+            if list_stack:
+                blocks.append(
+                    _block_from_token(
+                        "list_item",
+                        _inline_text(inline),
+                        token,
+                        lines,
+                        marker=list_stack[-1],
+                        indent_level=max(0, len(list_stack) - 1),
+                    )
+                )
+            else:
+                blocks.append(_block_from_token("paragraph", _inline_text(inline), token, lines))
+            index = _skip_until(tokens, index, "paragraph_close") + 1
+            continue
+
+        if token.type == "table_open":
+            blocks.append(_block_from_token("table", _raw_text(token, lines), token, lines, supported=False))
+            index = _skip_until(tokens, index, "table_close") + 1
+            continue
+
+        if token.type == "fence":
+            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=False, info=token.info))
+            index += 1
+            continue
+
+        if token.type == "code_block":
+            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=False))
+            index += 1
+            continue
+
+        if token.type == "html_block":
+            blocks.append(_block_from_token("html_block", token.content, token, lines, supported=False))
+            index += 1
+            continue
+
+        index += 1
+
+    for block_index, block in enumerate(blocks, start=1):
+        block["block_id"] = f"B{block_index:03d}"
+    return blocks
+
+
+def _parse_markdown_blocks_legacy(markdown_text: str) -> list[dict]:
     lines = markdown_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     blocks = []
     paragraph_lines = []
@@ -147,6 +242,60 @@ def parse_markdown_blocks(markdown_text: str) -> list[dict]:
     for index, block in enumerate(blocks, start=1):
         block["block_id"] = f"B{index:03d}"
     return blocks
+
+
+def _block_from_token(block_type: str, text: str, token, lines: list[str], supported: bool = True, **extra) -> dict:
+    line_start, line_end = _line_range(token)
+    raw = _raw_text(token, lines)
+    return _block(block_type, text, line_start, line_end, raw, supported=supported, **extra)
+
+
+def _line_range(token) -> tuple[int, int]:
+    if not token.map:
+        return 1, 1
+    return int(token.map[0]) + 1, int(token.map[1])
+
+
+def _raw_text(token, lines: list[str]) -> str:
+    if not token.map:
+        return token.content or ""
+    start, end = token.map
+    return "\n".join(lines[start:end])
+
+
+def _next_inline(tokens, start_index: int):
+    index = start_index + 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token.type == "inline":
+            return token
+        if token.nesting < 0:
+            return None
+        index += 1
+    return None
+
+
+def _inline_text(token) -> str:
+    if token is None:
+        return ""
+    return (token.content or "").replace("\n", " ").strip()
+
+
+def _skip_until(tokens, start_index: int, token_type: str) -> int:
+    index = start_index + 1
+    while index < len(tokens):
+        if tokens[index].type == token_type:
+            return index
+        index += 1
+    return start_index
+
+
+def _list_marker(token) -> str:
+    if token.type == "ordered_list_open":
+        start = token.attrGet("start") or "1"
+        delimiter = token.markup or "."
+        return f"{start}{delimiter}"
+    return token.markup or "-"
 
 
 def _block(block_type: str, text: str, line_start: int, line_end: int, raw: str, supported: bool = True, **extra) -> dict:
