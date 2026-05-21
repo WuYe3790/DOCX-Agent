@@ -40,6 +40,7 @@ def parse_markdown_draft(markdown_path: str) -> str:
                     "line_start": block["line_start"],
                     "line_end": block["line_end"],
                     "runs": _preview_runs(block),
+                    "table": _preview_table(block),
                     "indent": _preview_indent(block),
                     "supported": block.get("supported", True),
                 }
@@ -50,6 +51,7 @@ def parse_markdown_draft(markdown_path: str) -> str:
                 "heading2": "子标题样本，如 S004",
                 "paragraph": "正文样本，如 S001",
                 "list_item": "正文样本，如 S001",
+                "table_cell": "表格内普通文本样本；未提供时使用 paragraph",
             },
         }
     )
@@ -72,6 +74,8 @@ tools_schema = {
 
 
 def _preview_runs(block: dict) -> list[dict]:
+    if block["type"] == "table":
+        return []
     text = block.get("text") or ""
     if block["type"] == "list_item":
         marker = block.get("marker") or "-"
@@ -91,3 +95,13 @@ def _preview_indent(block: dict) -> dict | None:
         return None
     level = int(block.get("indent_level", 0))
     return {"left_twips": 360 * (level + 1), "hanging_twips": 180}
+
+
+def _preview_table(block: dict) -> dict | None:
+    if block["type"] != "table":
+        return None
+    return {
+        "row_count": len(block.get("rows") or []),
+        "column_count": block.get("column_count", 0),
+        "rows": block.get("rows") or [],
+    }

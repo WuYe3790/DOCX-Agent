@@ -11,7 +11,7 @@ try:
         write_document_xml,
     )
     from docx_tools.style_profile import load_style_sample
-    from docx_compiler.ir import ParagraphIR, RunIR
+    from docx_compiler.ir import CellIR, ParagraphIR, RunIR, TableIR, TableRowIR
     from docx_compiler.render import render_blocks_to_container
 except ModuleNotFoundError:
     from src.docx_tools.common import (
@@ -26,13 +26,13 @@ except ModuleNotFoundError:
         write_document_xml,
     )
     from src.docx_tools.style_profile import load_style_sample
-    from src.docx_compiler.ir import ParagraphIR, RunIR
+    from src.docx_compiler.ir import CellIR, ParagraphIR, RunIR, TableIR, TableRowIR
     from src.docx_compiler.render import render_blocks_to_container
 
 from .common import parse_markdown_blocks, read_markdown_text
 
 
-SUPPORTED_TYPES = {"heading1", "heading2", "paragraph", "list_item"}
+SUPPORTED_TYPES = {"heading1", "heading2", "paragraph", "list_item", "table"}
 
 
 def apply_markdown_ir_to_table_cell(
@@ -65,7 +65,7 @@ def apply_markdown_ir_to_table_cell(
         return json_result(
             {
                 "status": "unsupported_markdown",
-                "message": "第一版暂不支持 Markdown 表格、代码块等复杂块；请先改成标题、正文或列表。",
+                "message": "暂不支持代码块、HTML 等复杂块；Markdown 表格、标题、正文和列表可直接编译。",
                 "markdown_path": str(target),
                 "selected_block_count": len(blocks),
                 "unsupported_blocks": [
@@ -140,7 +140,7 @@ def _build_render_items(blocks: list[dict], style_mapping: dict):
     style_sample_ids = set()
     for block in blocks:
         block_type = block["type"]
-        sample_id = style_mapping.get(block_type)
+        sample_id = _sample_id_for_block(block, style_mapping)
         if not sample_id:
             return (
                 json_result(
@@ -152,7 +152,8 @@ def _build_render_items(blocks: list[dict], style_mapping: dict):
                 ),
                 style_sample_ids,
             )
-        style_sample_ids.add(sample_id)
+        if sample_id:
+            style_sample_ids.add(sample_id)
         render_items.append(
             {
                 "block_id": block["block_id"],
@@ -163,9 +164,18 @@ def _build_render_items(blocks: list[dict], style_mapping: dict):
                 "line_end": block["line_end"],
                 "indent_level": block.get("indent_level", 0),
                 "marker": block.get("marker"),
+                "rows": block.get("rows"),
+                "column_count": block.get("column_count"),
             }
         )
     return render_items, style_sample_ids
+
+
+def _sample_id_for_block(block: dict, style_mapping: dict) -> str | None:
+    block_type = block["type"]
+    if block_type == "table":
+        return style_mapping.get("table_cell") or style_mapping.get("paragraph") or style_mapping.get("table")
+    return style_mapping.get(block_type)
 
 
 def _filter_blocks(
@@ -202,26 +212,53 @@ def _render_text(block: dict) -> str:
     return block["text"]
 
 
-def _items_to_layout_ir(items: list[dict]) -> list[ParagraphIR]:
+def _items_to_layout_ir(items: list[dict]) -> list[ParagraphIR | TableIR]:
     blocks = []
     previous = None
     for item in items:
         if previous is not None and item["line_start"] > previous["line_end"] + 1:
             blocks.append(ParagraphIR(runs=[]))
-        blocks.append(
-            ParagraphIR(
-                runs=_parse_inline_runs(item["text"]),
-                style_sample_id=item["sample_id"],
-                block_id=item["block_id"],
-                block_type=item["type"],
-                line_start=item["line_start"],
-                line_end=item["line_end"],
-                list_level=int(item.get("indent_level", 0)) if item["type"] == "list_item" else None,
+        if item["type"] == "table":
+            blocks.append(_item_to_table_ir(item))
+        else:
+            blocks.append(
+                ParagraphIR(
+                    runs=_parse_inline_runs(item["text"]),
+                    style_sample_id=item["sample_id"],
+                    block_id=item["block_id"],
+                    block_type=item["type"],
+                    line_start=item["line_start"],
+                    line_end=item["line_end"],
+                    list_level=int(item.get("indent_level", 0)) if item["type"] == "list_item" else None,
                 list_marker=item.get("marker"),
+                )
             )
-        )
         previous = item
     return blocks
+
+
+def _item_to_table_ir(item: dict) -> TableIR:
+    rows = []
+    for row in item.get("rows") or []:
+        cells = []
+        for cell in row:
+            text = cell.get("text", "") if isinstance(cell, dict) else str(cell)
+            cells.append(
+                CellIR(
+                    blocks=[
+                        ParagraphIR(
+                            runs=_parse_inline_runs(text),
+                            style_sample_id=item.get("sample_id"),
+                            block_id=item["block_id"],
+                            block_type="table_cell",
+                            line_start=item["line_start"],
+                            line_end=item["line_end"],
+                        )
+                    ]
+                )
+            )
+        rows.append(TableRowIR(cells=cells))
+    return TableIR(rows=rows)
 
 
 def _parse_inline_runs(text: str) -> list[RunIR]:

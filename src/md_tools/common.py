@@ -102,8 +102,9 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
             continue
 
         if token.type == "table_open":
-            blocks.append(_block_from_token("table", _raw_text(token, lines), token, lines, supported=False))
-            index = _skip_until(tokens, index, "table_close") + 1
+            end_index = _skip_until(tokens, index, "table_close")
+            blocks.append(_table_block_from_tokens(tokens, index, end_index, lines))
+            index = end_index + 1
             continue
 
         if token.type == "fence":
@@ -153,7 +154,18 @@ def _parse_markdown_blocks_legacy(markdown_text: str) -> list[dict]:
         nonlocal table_lines, table_start
         if not table_lines:
             return
-        blocks.append(_block("table", "\n".join(table_lines), table_start, end_line, "\n".join(table_lines), supported=False))
+        raw = "\n".join(table_lines)
+        blocks.append(
+            _block(
+                "table",
+                raw,
+                table_start,
+                end_line,
+                raw,
+                supported=True,
+                rows=_parse_pipe_table_rows(table_lines),
+            )
+        )
         table_lines = []
         table_start = None
 
@@ -250,6 +262,51 @@ def _block_from_token(block_type: str, text: str, token, lines: list[str], suppo
     return _block(block_type, text, line_start, line_end, raw, supported=supported, **extra)
 
 
+def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: list[str]) -> dict:
+    token = tokens[start_index]
+    rows = []
+    current_row = None
+    current_cell = None
+    header_row_count = 0
+
+    for item in tokens[start_index + 1 : end_index]:
+        if item.type == "thead_open":
+            header_row_count = len(rows) + 1
+            continue
+        if item.type == "tr_open":
+            current_row = []
+            continue
+        if item.type == "tr_close":
+            if current_row is not None:
+                rows.append(current_row)
+            current_row = None
+            continue
+        if item.type in {"th_open", "td_open"}:
+            current_cell = {"text": "", "header": item.type == "th_open"}
+            continue
+        if item.type in {"th_close", "td_close"}:
+            if current_row is not None and current_cell is not None:
+                current_row.append(current_cell)
+            current_cell = None
+            continue
+        if item.type == "inline" and current_cell is not None:
+            current_cell["text"] = _inline_text(item)
+
+    line_start, line_end = _line_range(token)
+    raw = _raw_text(token, lines)
+    return _block(
+        "table",
+        raw,
+        line_start,
+        line_end,
+        raw,
+        supported=True,
+        rows=rows,
+        header_row_count=1 if header_row_count else 0,
+        column_count=max((len(row) for row in rows), default=0),
+    )
+
+
 def _line_range(token) -> tuple[int, int]:
     if not token.map:
         return 1, 1
@@ -296,6 +353,25 @@ def _list_marker(token) -> str:
         delimiter = token.markup or "."
         return f"{start}{delimiter}"
     return token.markup or "-"
+
+
+def _parse_pipe_table_rows(table_lines: list[str]) -> list[list[dict]]:
+    rows = []
+    for index, line in enumerate(table_lines):
+        cells = _split_pipe_row(line)
+        if index == 1 and all(re.match(r"^:?-{3,}:?$", cell.strip()) for cell in cells):
+            continue
+        rows.append([{"text": cell.strip(), "header": index == 0} for cell in cells])
+    return rows
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
 
 
 def _block(block_type: str, text: str, line_start: int, line_end: int, raw: str, supported: bool = True, **extra) -> dict:
