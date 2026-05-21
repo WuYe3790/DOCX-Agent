@@ -36,7 +36,7 @@ except ModuleNotFoundError:
     )
 
 from .ir import CellIR, ParagraphIR, RunIR, TableIR, TableRowIR
-from .render import render_table
+from .render import container_table_width_twips, render_table
 
 
 def table_ir_from_texts(cell_texts: list[list[str]], column_widths_twips: list[int] | None = None) -> TableIR:
@@ -87,7 +87,10 @@ def insert_table_in_cell_op(
     row = get_row_by_index(table, row_index)
     cell = get_cell_by_index(row, cell_index)
     before_summary = table_summary(table)
-    nested = render_table(table_ir_from_texts(cell_texts, column_widths_twips))
+    nested = render_table(
+        table_ir_from_texts(cell_texts, column_widths_twips),
+        available_width_twips=container_table_width_twips(cell),
+    )
     _append_nested_table(cell, nested)
     write_document_xml(docx_path, output_path, root)
     return {

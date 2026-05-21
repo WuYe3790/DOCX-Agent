@@ -24,6 +24,9 @@ except ModuleNotFoundError:
 from .ir import CellIR, ParagraphIR, RunIR, TableIR
 from .optimizer import optimize_paragraph
 
+DEFAULT_TABLE_WIDTH_TWIPS = 9000
+MIN_COLUMN_WIDTH_TWIPS = 900
+
 
 def render_blocks_to_container(
     container,
@@ -42,13 +45,17 @@ def render_blocks_to_container(
         if isinstance(block, ParagraphIR):
             element = render_paragraph(block, style_samples=style_samples)
         elif isinstance(block, TableIR):
-            element = render_table(block, style_samples=style_samples)
+            element = render_table(
+                block,
+                style_samples=style_samples,
+                available_width_twips=container_table_width_twips(container),
+            )
         else:
             raise TypeError(f"unsupported block IR: {type(block).__name__}")
         container.append(element)
         rendered.append(element)
 
-    if container.tag == f"{W}tc" and not container.xpath("./w:p", namespaces=NS):
+    if container.tag == f"{W}tc" and (len(container) == 1 or container[-1].tag != f"{W}p"):
         container.append(etree.Element(f"{W}p", nsmap=container.nsmap))
     return rendered
 
@@ -87,7 +94,12 @@ def render_paragraph(paragraph_ir: ParagraphIR, style_samples: dict[str, dict] |
     return paragraph
 
 
-def render_table(table_ir: TableIR, style_samples: dict[str, dict] | None = None, template_table=None):
+def render_table(
+    table_ir: TableIR,
+    style_samples: dict[str, dict] | None = None,
+    template_table=None,
+    available_width_twips: int | None = None,
+):
     table = etree.Element(f"{W}tbl", nsmap=template_table.nsmap if template_table is not None else None)
     if template_table is not None:
         tbl_pr = template_table.find(f"{W}tblPr")
@@ -96,11 +108,16 @@ def render_table(table_ir: TableIR, style_samples: dict[str, dict] | None = None
     else:
         tbl_pr = etree.SubElement(table, f"{W}tblPr")
         tbl_w = etree.SubElement(tbl_pr, f"{W}tblW")
-        tbl_w.set(f"{W}w", "0")
-        tbl_w.set(f"{W}type", "auto")
+        width = _table_width(table_ir, available_width_twips)
+        if width is None:
+            tbl_w.set(f"{W}w", "0")
+            tbl_w.set(f"{W}type", "auto")
+        else:
+            tbl_w.set(f"{W}w", str(width))
+            tbl_w.set(f"{W}type", "dxa")
         _append_default_borders(tbl_pr)
 
-    widths = table_ir.column_widths_twips or _default_widths(table_ir)
+    widths = table_ir.column_widths_twips or _default_widths(table_ir, available_width_twips)
     grid = etree.SubElement(table, f"{W}tblGrid")
     for width in widths:
         col = etree.SubElement(grid, f"{W}gridCol")
@@ -211,7 +228,45 @@ def _append_default_borders(tbl_pr) -> None:
         border.set(f"{W}color", "auto")
 
 
-def _default_widths(table_ir: TableIR) -> list[int]:
+def container_table_width_twips(container) -> int | None:
+    if container.tag != f"{W}tc":
+        return None
+    tc_w = container.find(f"{W}tcPr/{W}tcW")
+    if tc_w is None or tc_w.get(f"{W}type") != "dxa":
+        return None
+    try:
+        width = int(tc_w.get(f"{W}w"))
+    except (TypeError, ValueError):
+        return None
+    left_margin, right_margin = _cell_horizontal_margins_twips(container)
+    return max(1200, width - left_margin - right_margin)
+
+
+def _cell_horizontal_margins_twips(cell) -> tuple[int, int]:
+    tc_mar = cell.find(f"{W}tcPr/{W}tcMar")
+    if tc_mar is None:
+        return 108, 108
+    return _margin_width(tc_mar.find(f"{W}left"), 108), _margin_width(tc_mar.find(f"{W}right"), 108)
+
+
+def _margin_width(element, default: int) -> int:
+    if element is None or element.get(f"{W}type") not in {None, "dxa"}:
+        return default
+    try:
+        return int(element.get(f"{W}w"))
+    except (TypeError, ValueError):
+        return default
+
+
+def _table_width(table_ir: TableIR, available_width_twips: int | None) -> int | None:
+    if table_ir.column_widths_twips:
+        return sum(int(width) for width in table_ir.column_widths_twips)
+    return None
+
+
+def _default_widths(table_ir: TableIR, available_width_twips: int | None) -> list[int]:
     col_count = max((len(row.cells) for row in table_ir.rows), default=1)
-    width = max(1200, 9000 // max(1, col_count))
+    total_width = available_width_twips or DEFAULT_TABLE_WIDTH_TWIPS
+    min_width = MIN_COLUMN_WIDTH_TWIPS if total_width >= MIN_COLUMN_WIDTH_TWIPS * col_count else 240
+    width = max(min_width, total_width // max(1, col_count))
     return [width] * col_count
