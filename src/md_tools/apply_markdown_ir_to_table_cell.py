@@ -1,41 +1,33 @@
 try:
     from docx_tools.common import (
-        apply_sample_format_to_paragraph,
-        append_run_to_paragraph,
         cell_text,
         clear_cell_to_empty_paragraph,
         get_cell_by_index,
         get_row_by_index,
         get_table_by_index,
-        insert_paragraphs_after,
         json_result,
         load_document_xml,
-        NS,
-        set_run_bold,
-        W,
         table_summary,
         write_document_xml,
     )
     from docx_tools.style_profile import load_style_sample
+    from docx_compiler.ir import ParagraphIR, RunIR
+    from docx_compiler.render import render_blocks_to_container
 except ModuleNotFoundError:
     from src.docx_tools.common import (
-        apply_sample_format_to_paragraph,
-        append_run_to_paragraph,
         cell_text,
         clear_cell_to_empty_paragraph,
         get_cell_by_index,
         get_row_by_index,
         get_table_by_index,
-        insert_paragraphs_after,
         json_result,
         load_document_xml,
-        NS,
-        set_run_bold,
-        W,
         table_summary,
         write_document_xml,
     )
     from src.docx_tools.style_profile import load_style_sample
+    from src.docx_compiler.ir import ParagraphIR, RunIR
+    from src.docx_compiler.render import render_blocks_to_container
 
 from .common import parse_markdown_blocks, read_markdown_text
 
@@ -90,30 +82,9 @@ def apply_markdown_ir_to_table_cell(
             }
         )
 
-    render_items = []
-    for block in blocks:
-        block_type = block["type"]
-        sample_id = style_mapping.get(block_type)
-        if not sample_id:
-            return json_result(
-                {
-                    "status": "error",
-                    "message": f"style_mapping 缺少 {block_type}",
-                    "required_mapping_keys": sorted({block["type"] for block in blocks}),
-                }
-            )
-        render_items.append(
-            {
-                "block_id": block["block_id"],
-                "type": block_type,
-                "text": _render_text(block),
-                "sample_id": sample_id,
-                "line_start": block["line_start"],
-                "line_end": block["line_end"],
-                "indent_level": block.get("indent_level", 0),
-            }
-        )
-
+    render_items, style_sample_ids = _build_render_items(blocks, style_mapping)
+    if isinstance(render_items, str):
+        return render_items
     if not render_items:
         return json_result({"status": "error", "message": "Markdown 草稿没有可写入内容", "markdown_path": str(target)})
 
@@ -125,26 +96,17 @@ def apply_markdown_ir_to_table_cell(
     except IndexError as exc:
         return json_result({"status": "error", "message": str(exc)})
 
+    try:
+        style_samples = {sample_id: load_style_sample(style_profile_path, sample_id) for sample_id in sorted(style_sample_ids)}
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        return json_result({"status": "error", "message": str(exc), "style_profile_path": style_profile_path})
+
     before_table = table_summary(table)
     before_text = cell_text(cell)
-    first_item = render_items[0]
-    first_sample = load_style_sample(style_profile_path, first_item["sample_id"])
-    paragraph = clear_cell_to_empty_paragraph(cell)
-    _write_inline_markdown_to_paragraph(paragraph, first_item["text"], first_sample)
-    _apply_list_indent(paragraph, first_item)
+    layout_blocks = _items_to_layout_ir(render_items)
 
-    current = paragraph
-    previous_item = first_item
-    for item in render_items[1:]:
-        if item["line_start"] > previous_item["line_end"] + 1:
-            insert_paragraphs_after(current, [""], style_paragraph=current)
-            current = current.getnext()
-        insert_paragraphs_after(current, [""], style_paragraph=current)
-        current = current.getnext()
-        sample = load_style_sample(style_profile_path, item["sample_id"])
-        _write_inline_markdown_to_paragraph(current, item["text"], sample)
-        _apply_list_indent(current, item)
-        previous_item = item
+    clear_cell_to_empty_paragraph(cell)
+    render_blocks_to_container(cell, layout_blocks, style_samples=style_samples, clear_existing=True)
 
     after_text = cell_text(cell)
     write_document_xml(docx_path, output_path, root)
@@ -166,10 +128,44 @@ def apply_markdown_ir_to_table_cell(
             "after_text": after_text,
             "written_block_count": len(render_items),
             "written_blocks": render_items,
+            "layout_ir_block_count": len(layout_blocks),
             "before_table": before_table,
             "after_table": table_summary(table),
         }
     )
+
+
+def _build_render_items(blocks: list[dict], style_mapping: dict):
+    render_items = []
+    style_sample_ids = set()
+    for block in blocks:
+        block_type = block["type"]
+        sample_id = style_mapping.get(block_type)
+        if not sample_id:
+            return (
+                json_result(
+                    {
+                        "status": "error",
+                        "message": f"style_mapping 缺少 {block_type}",
+                        "required_mapping_keys": sorted({block["type"] for block in blocks}),
+                    }
+                ),
+                style_sample_ids,
+            )
+        style_sample_ids.add(sample_id)
+        render_items.append(
+            {
+                "block_id": block["block_id"],
+                "type": block_type,
+                "text": _render_text(block),
+                "sample_id": sample_id,
+                "line_start": block["line_start"],
+                "line_end": block["line_end"],
+                "indent_level": block.get("indent_level", 0),
+                "marker": block.get("marker"),
+            }
+        )
+    return render_items, style_sample_ids
 
 
 def _filter_blocks(
@@ -202,71 +198,69 @@ def _filter_blocks(
 def _render_text(block: dict) -> str:
     if block["type"] == "list_item":
         marker = block.get("marker") or "-"
-        prefix = "  " * int(block.get("indent_level", 0))
-        return f"{prefix}{marker} {block['text']}"
+        return f"{marker} {block['text']}"
     return block["text"]
 
 
-def _apply_list_indent(paragraph, item: dict) -> None:
-    ppr = paragraph.find(f"{W}pPr")
-    if ppr is not None:
-        for child in list(ppr):
-            if child.tag == f"{W}ind":
-                ppr.remove(child)
-    if item["type"] != "list_item":
-        return
-    indent_level = int(item.get("indent_level", 0))
-    if indent_level <= 0:
-        return
-    from lxml import etree
-
-    if ppr is None:
-        ppr = etree.Element(f"{W}pPr")
-        paragraph.insert(0, ppr)
-    ind = etree.Element(f"{W}ind")
-    left_twips = 360 * indent_level
-    ind.set(f"{W}left", str(left_twips))
-    ind.set(f"{W}hanging", "180")
-    ppr.append(ind)
-
-
-def _write_inline_markdown_to_paragraph(paragraph, text: str, style_sample: dict) -> None:
-    """写入段落文本，并把 **加粗** 转成 Word run 加粗。"""
-    for run in list(paragraph.xpath("./w:r", namespaces=NS)):
-        paragraph.remove(run)
-
-    segments = _parse_bold_segments(text)
-    run_records = []
-    for value, is_bold in segments:
-        if not value:
-            continue
-        run = append_run_to_paragraph(paragraph, value)
-        run_records.append((run, is_bold))
-
-    apply_sample_format_to_paragraph(paragraph, style_sample)
-    for run, is_bold in run_records:
-        if is_bold:
-            set_run_bold(run, True)
+def _items_to_layout_ir(items: list[dict]) -> list[ParagraphIR]:
+    blocks = []
+    previous = None
+    for item in items:
+        if previous is not None and item["line_start"] > previous["line_end"] + 1:
+            blocks.append(ParagraphIR(runs=[]))
+        blocks.append(
+            ParagraphIR(
+                runs=_parse_inline_runs(item["text"]),
+                style_sample_id=item["sample_id"],
+                block_id=item["block_id"],
+                block_type=item["type"],
+                line_start=item["line_start"],
+                line_end=item["line_end"],
+                list_level=int(item.get("indent_level", 0)) if item["type"] == "list_item" else None,
+                list_marker=item.get("marker"),
+            )
+        )
+        previous = item
+    return blocks
 
 
-def _parse_bold_segments(text: str) -> list[tuple[str, bool]]:
+def _parse_inline_runs(text: str) -> list[RunIR]:
     """解析最小 Markdown 加粗语法；未闭合的 ** 按普通文本处理。"""
-    result = []
+    runs = []
     cursor = 0
     while cursor < len(text):
         start = text.find("**", cursor)
         if start == -1:
-            result.append((text[cursor:], False))
+            _append_text_runs(runs, text[cursor:], bold=False)
             break
         if start > cursor:
-            result.append((text[cursor:start], False))
+            _append_text_runs(runs, text[cursor:start], bold=False)
         end = text.find("**", start + 2)
         if end == -1:
-            result.append((text[start:], False))
+            _append_text_runs(runs, text[start:], bold=False)
             break
-        result.append((text[start + 2 : end], True))
+        _append_text_runs(runs, text[start + 2 : end], bold=True)
         cursor = end + 2
-    return result
+    return runs
+
+
+def _append_text_runs(runs: list[RunIR], text: str, bold: bool) -> None:
+    token = []
+    for char in text:
+        if char == "\t":
+            if token:
+                runs.append(RunIR.text_run("".join(token), bold=bold))
+                token = []
+            runs.append(RunIR.tab())
+        elif char == "\n":
+            if token:
+                runs.append(RunIR.text_run("".join(token), bold=bold))
+                token = []
+            runs.append(RunIR.line_break())
+        else:
+            token.append(char)
+    if token:
+        runs.append(RunIR.text_run("".join(token), bold=bold))
 
 
 tools_schema = {

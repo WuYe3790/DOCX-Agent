@@ -33,6 +33,18 @@ def parse_markdown_draft(markdown_path: str) -> str:
                 for block in unsupported
             ],
             "blocks": blocks,
+            "layout_ir_preview": [
+                {
+                    "block_id": block["block_id"],
+                    "block_type": block["type"],
+                    "line_start": block["line_start"],
+                    "line_end": block["line_end"],
+                    "runs": _preview_runs(block),
+                    "indent": _preview_indent(block),
+                    "supported": block.get("supported", True),
+                }
+                for block in blocks
+            ],
             "style_mapping_hint": {
                 "heading1": "章节标题样本，如 S002",
                 "heading2": "子标题样本，如 S004",
@@ -57,3 +69,25 @@ tools_schema = {
         },
     },
 }
+
+
+def _preview_runs(block: dict) -> list[dict]:
+    text = block.get("text") or ""
+    if block["type"] == "list_item":
+        marker = block.get("marker") or "-"
+        text = f"{marker} {text}"
+    runs = []
+    parts = text.split("\t")
+    for index, part in enumerate(parts):
+        if part:
+            runs.append({"kind": "text", "text": part})
+        if index < len(parts) - 1:
+            runs.append({"kind": "tab"})
+    return runs
+
+
+def _preview_indent(block: dict) -> dict | None:
+    if block["type"] != "list_item":
+        return None
+    level = int(block.get("indent_level", 0))
+    return {"left_twips": 360 * (level + 1), "hanging_twips": 180}

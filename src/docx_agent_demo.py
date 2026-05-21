@@ -24,6 +24,11 @@ WORD_EDITING_TOOL_NAMES = {
     "read_markdown_draft",
     "parse_markdown_draft",
     "apply_markdown_ir_to_table_cell",
+    "set_paragraph_indent",
+    "insert_table_after_paragraph",
+    "insert_table_in_cell",
+    "insert_table_column_after",
+    "merge_table_cells_horizontal",
     "clear_table_cell",
     "delete_table_row",
     "diff_docx",
@@ -143,6 +148,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 如果现有 Markdown 片段不适合写入，可以用 write_markdown_draft 生成或覆盖一个更小的片段文件；这只能用于修订 Markdown，不能绕过渲染工具直接编辑 docx。
 然后由你基于样式审核结果选择 style_mapping，调用 apply_markdown_ir_to_table_cell 写入 Word。
 style_mapping 示例：heading1=章节标题样本，heading2=子标题样本，paragraph/list_item=正文样本。
+段落缩进用 set_paragraph_indent；新建普通表格用 insert_table_after_paragraph；单元格内嵌套表格用 insert_table_in_cell；插入列用 insert_table_column_after；横向合并用 merge_table_cells_horizontal。
 删除整行用 delete_table_row；清空单元格用 clear_table_cell。不要用 Markdown 渲染工具表达删除或清空。
 写入后必须调用 diff_docx 验证变化。
 """.strip()
@@ -159,7 +165,7 @@ SYSTEM_PROMPT = f"""
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
 5. 长内容生成先写 Markdown 草稿到 out/drafts，再解析 Markdown IR，由模型决定 style_mapping 和目标位置，最后调用 Markdown 到 Word 的渲染工具。
-6. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的行列文本确认目标表格、行、列。
+6. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。
 7. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 

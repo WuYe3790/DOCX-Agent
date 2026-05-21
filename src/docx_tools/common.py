@@ -212,7 +212,7 @@ def body_child_index(element) -> int:
 
 def set_text_preserve_space(text_node, value: str) -> None:
     text_node.text = value
-    if value.startswith(" ") or value.endswith(" "):
+    if value.startswith(" ") or value.endswith(" ") or "  " in value:
         text_node.set(f"{XML}space", "preserve")
     elif f"{XML}space" in text_node.attrib:
         del text_node.attrib[f"{XML}space"]

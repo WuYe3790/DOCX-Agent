@@ -1,4 +1,15 @@
-from .common import NS, json_result, load_document_xml, paragraph_location, paragraph_text, paragraphs, tables
+from .common import (
+    NS,
+    W,
+    json_result,
+    load_document_xml,
+    nearest_ancestor,
+    paragraph_location,
+    paragraph_text,
+    paragraphs,
+    row_cells,
+    tables,
+)
 
 
 def read_docx_structure(docx_path: str, max_items: int = 80) -> str:
@@ -20,7 +31,9 @@ def read_docx_structure(docx_path: str, max_items: int = 80) -> str:
             break
 
     table_items = []
-    for table_index, table in enumerate(tables(root), start=1):
+    all_tables = tables(root)
+    table_index_by_id = {id(table): index for index, table in enumerate(all_tables, start=1)}
+    for table_index, table in enumerate(all_tables, start=1):
         rows = table.xpath("./w:tr", namespaces=NS)
         row_summaries = []
         for row_index, row in enumerate(rows, start=1):
@@ -28,13 +41,17 @@ def read_docx_structure(docx_path: str, max_items: int = 80) -> str:
             row_summaries.append(
                 {
                     "row_index": row_index,
-                    "cells": [
-                        "".join(t.text or "" for t in cell.xpath(".//w:t", namespaces=NS))
-                        for cell in cells
-                    ],
+                    "cells": [_cell_summary(cell, cell_index) for cell_index, cell in enumerate(cells, start=1)],
                 }
             )
-        table_items.append({"table_index": table_index, "rows": row_summaries})
+        table_items.append(
+            {
+                "table_index": table_index,
+                "depth": _table_depth(table),
+                "parent": _table_parent_location(table, table_index_by_id),
+                "rows": row_summaries,
+            }
+        )
 
     return json_result(
         {
@@ -62,3 +79,56 @@ tools_schema = {
         },
     },
 }
+
+
+def _cell_summary(cell, cell_index: int) -> dict:
+    direct_text = "".join(t.text or "" for t in cell.xpath("./w:p//w:t", namespaces=NS))
+    all_text = "".join(t.text or "" for t in cell.xpath(".//w:t", namespaces=NS))
+    nested_tables = cell.xpath("./w:tbl", namespaces=NS)
+    return {
+        "cell_index": cell_index,
+        "direct_text": direct_text,
+        "text": all_text,
+        "nested_table_count": len(nested_tables),
+    }
+
+
+def _table_depth(table) -> int:
+    depth = 0
+    current = table.getparent()
+    while current is not None:
+        if current.tag == f"{W}tbl":
+            depth += 1
+        current = current.getparent()
+    return depth
+
+
+def _table_parent_location(table, table_index_by_id: dict[int, int]) -> dict | None:
+    parent_cell = nearest_ancestor(table, f"{W}tc")
+    if parent_cell is None:
+        return None
+    parent_row = nearest_ancestor(parent_cell, f"{W}tr")
+    parent_table = nearest_ancestor(parent_row, f"{W}tbl") if parent_row is not None else None
+    if parent_row is None or parent_table is None:
+        return None
+    return {
+        "table_index": table_index_by_id.get(id(parent_table)),
+        "row_index": _index_in_parent(parent_row, f"{W}tr"),
+        "cell_index": _cell_index_in_row(parent_cell),
+    }
+
+
+def _index_in_parent(element, tag: str) -> int | None:
+    parent = element.getparent()
+    if parent is None:
+        return None
+    same = [child for child in parent if child.tag == tag]
+    return same.index(element) + 1 if element in same else None
+
+
+def _cell_index_in_row(cell) -> int | None:
+    row = nearest_ancestor(cell, f"{W}tr")
+    if row is None:
+        return None
+    cells = row_cells(row)
+    return cells.index(cell) + 1 if cell in cells else None

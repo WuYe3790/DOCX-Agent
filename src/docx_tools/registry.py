@@ -19,9 +19,13 @@ from .insert_paragraph_after_like_sample import (
     insert_paragraph_after_like_sample,
     tools_schema as insert_paragraph_after_like_sample_schema,
 )
+from .insert_table_after_paragraph import insert_table_after_paragraph, tools_schema as insert_table_after_paragraph_schema
+from .insert_table_column_after import insert_table_column_after, tools_schema as insert_table_column_after_schema
+from .insert_table_in_cell import insert_table_in_cell, tools_schema as insert_table_in_cell_schema
 from .insert_table_row_after import insert_table_row_after, tools_schema as insert_table_row_after_schema
 from .insert_text_at import insert_text_at, tools_schema as insert_text_at_schema
 from .insert_text_in_table_cell import insert_text_in_table_cell, tools_schema as insert_text_in_table_cell_schema
+from .merge_table_cells_horizontal import merge_table_cells_horizontal, tools_schema as merge_table_cells_horizontal_schema
 from .read_docx_structure import read_docx_structure, tools_schema as read_docx_structure_schema
 from .replace_table_cell_like_sample import (
     replace_table_cell_like_sample,
@@ -30,6 +34,7 @@ from .replace_table_cell_like_sample import (
 from .replace_table_cell_text import replace_table_cell_text, tools_schema as replace_table_cell_text_schema
 from .replace_text_like_sample import replace_text_like_sample, tools_schema as replace_text_like_sample_schema
 from .replace_text import replace_text, tools_schema as replace_text_schema
+from .set_paragraph_indent import set_paragraph_indent, tools_schema as set_paragraph_indent_schema
 from .set_text_format import set_text_format, tools_schema as set_text_format_schema
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
@@ -48,6 +53,11 @@ TOOLS = {
     "insert_text_at": insert_text_at,
     "insert_text_in_table_cell": insert_text_in_table_cell,
     "insert_table_row_after": insert_table_row_after,
+    "set_paragraph_indent": set_paragraph_indent,
+    "insert_table_after_paragraph": insert_table_after_paragraph,
+    "insert_table_in_cell": insert_table_in_cell,
+    "insert_table_column_after": insert_table_column_after,
+    "merge_table_cells_horizontal": merge_table_cells_horizontal,
     "clear_table_cell": clear_table_cell,
     "delete_table_row": delete_table_row,
     "replace_table_cell_text": replace_table_cell_text,
@@ -73,6 +83,11 @@ TOOLS_SCHEMA = [
     insert_text_at_schema,
     insert_text_in_table_cell_schema,
     insert_table_row_after_schema,
+    set_paragraph_indent_schema,
+    insert_table_after_paragraph_schema,
+    insert_table_in_cell_schema,
+    insert_table_column_after_schema,
+    merge_table_cells_horizontal_schema,
     clear_table_cell_schema,
     delete_table_row_schema,
     replace_table_cell_text_schema,
