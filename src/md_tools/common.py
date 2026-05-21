@@ -57,13 +57,19 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
         token = tokens[index]
 
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            list_stack.append(_list_marker(token))
+            list_stack.append(_list_context(token))
             index += 1
             continue
 
         if token.type in {"bullet_list_close", "ordered_list_close"}:
             if list_stack:
                 list_stack.pop()
+            index += 1
+            continue
+
+        if token.type == "list_item_open":
+            if list_stack:
+                list_stack[-1]["current_marker"] = _next_list_marker(list_stack[-1])
             index += 1
             continue
 
@@ -92,7 +98,8 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
                         _inline_text(inline),
                         token,
                         lines,
-                        marker=list_stack[-1],
+                        marker=list_stack[-1].get("current_marker") or _next_list_marker(list_stack[-1]),
+                        ordered=list_stack[-1].get("ordered", False),
                         indent_level=max(0, len(list_stack) - 1),
                     )
                 )
@@ -347,12 +354,29 @@ def _skip_until(tokens, start_index: int, token_type: str) -> int:
     return start_index
 
 
-def _list_marker(token) -> str:
+def _list_context(token) -> dict:
     if token.type == "ordered_list_open":
         start = token.attrGet("start") or "1"
         delimiter = token.markup or "."
-        return f"{start}{delimiter}"
-    return token.markup or "-"
+        return {
+            "ordered": True,
+            "delimiter": delimiter,
+            "next_number": int(start),
+            "current_marker": None,
+        }
+    return {
+        "ordered": False,
+        "marker": token.markup or "-",
+        "current_marker": None,
+    }
+
+
+def _next_list_marker(context: dict) -> str:
+    if context.get("ordered"):
+        number = int(context.get("next_number", 1))
+        context["next_number"] = number + 1
+        return f"{number}{context.get('delimiter') or '.'}"
+    return context.get("marker") or "-"
 
 
 def _parse_pipe_table_rows(table_lines: list[str]) -> list[list[dict]]:
