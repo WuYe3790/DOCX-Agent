@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 
 from .diagnostics import Diagnostic, SupportStatus, support_summary
 from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, TableRowIR
-from .markdown_parser import MarkdownBlock, blocks_to_dicts
+from .markdown_parser import (
+    ListItemBlock,
+    MarkdownBlock,
+    TableBlock,
+    blocks_to_dicts,
+)
 
 
 NATIVE_BLOCK_TYPES = {"heading1", "heading2", "paragraph", "table"}
@@ -14,7 +19,7 @@ REJECTED_BLOCK_TYPES = {"html_block"}
 
 @dataclass
 class LoweringResult:
-    source_blocks: list[dict] = field(default_factory=list)
+    source_blocks: list[MarkdownBlock] = field(default_factory=list)
     layout_blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR] = field(default_factory=list)
     render_items: list[dict] = field(default_factory=list)
     style_sample_ids: set[str] = field(default_factory=set)
@@ -22,61 +27,60 @@ class LoweringResult:
 
     @property
     def support_summary(self) -> dict:
-        return support_summary(self.source_blocks or self.render_items)
+        if self.source_blocks:
+            return support_summary(blocks_to_dicts(self.source_blocks))
+        return support_summary(self.render_items)
 
 
-def normalize_block_support(blocks: list[MarkdownBlock | dict]) -> list[dict]:
+def normalize_block_support(blocks: list[MarkdownBlock]) -> list[MarkdownBlock]:
     normalized = []
-    for block in blocks_to_dicts(blocks):
-        item = dict(block)
-        support = block_support(item)
-        item["support"] = support
-        item["supported"] = support != "rejected"
-        normalized.append(item)
+    for block in blocks:
+        block.support = block_support(block)
+        normalized.append(block)
     return normalized
 
 
-def block_support(block: dict) -> SupportStatus:
-    explicit = block.get("support")
+def block_support(block: MarkdownBlock) -> SupportStatus:
+    explicit = block.support
     if explicit in {"native", "degraded", "rejected"}:
         return explicit
-    block_type = block.get("type")
+    block_type = block.block_type
     if block_type in NATIVE_BLOCK_TYPES:
         return "native"
     if block_type in DEGRADED_BLOCK_TYPES:
         return "degraded"
     if block_type in REJECTED_BLOCK_TYPES:
         return "rejected"
-    return "native" if block.get("supported", True) else "rejected"
+    return "native"
 
 
-def diagnostics_for_blocks(blocks: list[dict]) -> list[Diagnostic]:
+def diagnostics_for_blocks(blocks: list[MarkdownBlock]) -> list[Diagnostic]:
     diagnostics = []
     for block in normalize_block_support(blocks):
-        support = block["support"]
-        if block.get("inline_formulas"):
+        support = block.support or "native"
+        if getattr(block, "inline_formulas", None):
             diagnostics.append(_diagnostic(block, "warning", "INLINE_FORMULA_RENDERED_AS_TEXT", "行内公式已识别，但当前保留为文本写入，暂未转换为 Word 原生 OMML。", "degraded"))
         if support == "native":
             continue
-        if block["type"] == "list_item":
+        if block.block_type == "list_item":
             diagnostics.append(_diagnostic(block, "warning", "LIST_ITEM_DEGRADED", "列表项按文本 marker 和段落缩进写入，暂未生成 Word 原生 numbering.xml。", support))
-        elif block["type"] == "code_block":
+        elif block.block_type == "code_block":
             diagnostics.append(_diagnostic(block, "warning", "CODE_BLOCK_DEGRADED", "代码块将按等宽段落写入，暂未做语法高亮。", support))
-        elif block["type"] == "formula_block":
+        elif block.block_type == "formula_block":
             diagnostics.append(_diagnostic(block, "warning", "FORMULA_RENDERED_AS_TEXT", "公式已识别，但当前按文本写入，暂未转换为 Word 原生 OMML。", support))
-        elif block["type"] == "html_block":
+        elif block.block_type == "html_block":
             diagnostics.append(_diagnostic(block, "error", "HTML_BLOCK_REJECTED", "HTML 块暂不支持写入 Word。", support))
         else:
-            diagnostics.append(_diagnostic(block, "error", "MARKDOWN_BLOCK_REJECTED", f"暂不支持的 Markdown 块类型: {block['type']}。", "rejected"))
+            diagnostics.append(_diagnostic(block, "error", "MARKDOWN_BLOCK_REJECTED", f"暂不支持的 Markdown 块类型: {block.block_type}。", "rejected"))
     return diagnostics
 
 
 def filter_blocks(
-    blocks: list[dict],
+    blocks: list[MarkdownBlock],
     include_block_ids: list[str] | None,
     line_start: int | None,
     line_end: int | None,
-) -> list[dict]:
+) -> list[MarkdownBlock]:
     if include_block_ids and (line_start is not None or line_end is not None):
         raise ValueError("include_block_ids 和 line_start/line_end 不能同时使用")
     if line_start is not None and line_end is not None and line_end < line_start:
@@ -84,8 +88,8 @@ def filter_blocks(
 
     if include_block_ids:
         wanted = {str(block_id) for block_id in include_block_ids}
-        selected = [block for block in blocks if block["block_id"] in wanted]
-        missing = sorted(wanted - {block["block_id"] for block in selected})
+        selected = [block for block in blocks if block.block_id in wanted]
+        missing = sorted(wanted - {block.block_id for block in selected})
         if missing:
             raise ValueError(f"include_block_ids not found: {', '.join(missing)}")
         return selected
@@ -96,19 +100,19 @@ def filter_blocks(
         overlapping = [
             block
             for block in blocks
-            if block["line_start"] <= end
-            and block["line_end"] >= start
-            and not (block["line_start"] >= start and block["line_end"] <= end)
+            if block.line_start <= end
+            and block.line_end >= start
+            and not (block.line_start >= start and block.line_end <= end)
         ]
         if overlapping:
-            ids = ", ".join(block["block_id"] for block in overlapping)
+            ids = ", ".join(block.block_id for block in overlapping)
             raise ValueError(f"line range cuts through block(s): {ids}")
-        return [block for block in blocks if block["line_start"] >= start and block["line_end"] <= end]
+        return [block for block in blocks if block.line_start >= start and block.line_end <= end]
 
     return blocks
 
 
-def lower_markdown_blocks(blocks: list[dict], style_mapping: dict) -> LoweringResult:
+def lower_markdown_blocks(blocks: list[MarkdownBlock], style_mapping: dict) -> LoweringResult:
     result = LoweringResult()
     normalized = normalize_block_support(blocks)
     result.source_blocks = normalized
@@ -116,7 +120,7 @@ def lower_markdown_blocks(blocks: list[dict], style_mapping: dict) -> LoweringRe
 
     previous = None
     for block in normalized:
-        if block["support"] == "rejected":
+        if block.support == "rejected":
             continue
         sample_id = _sample_id_for_block(block, style_mapping)
         if not sample_id:
@@ -125,8 +129,8 @@ def lower_markdown_blocks(blocks: list[dict], style_mapping: dict) -> LoweringRe
                     block,
                     "error",
                     "MISSING_STYLE_MAPPING",
-                    f"style_mapping 缺少 {block['type']}，也没有可用 fallback。",
-                    block["support"],
+                    f"style_mapping 缺少 {block.block_type}，也没有可用 fallback。",
+                    block.support or "rejected",
                 )
             )
             continue
@@ -141,27 +145,27 @@ def lower_markdown_blocks(blocks: list[dict], style_mapping: dict) -> LoweringRe
     return result
 
 
-def _render_item(block: dict, sample_id: str) -> dict:
+def _render_item(block: MarkdownBlock, sample_id: str) -> dict:
     return {
-        "block_id": block["block_id"],
-        "type": block["type"],
+        "block_id": block.block_id,
+        "type": block.block_type,
         "text": _render_text(block),
         "sample_id": sample_id,
-        "line_start": block["line_start"],
-        "line_end": block["line_end"],
-        "indent_level": block.get("indent_level", 0),
-        "marker": block.get("marker"),
-        "rows": block.get("rows"),
-        "column_count": block.get("column_count"),
-        "support": block["support"],
-        "language": block.get("info") or block.get("language"),
-        "source_format": block.get("source_format"),
-        "display": block.get("display"),
+        "line_start": block.line_start,
+        "line_end": block.line_end,
+        "indent_level": getattr(block, "indent_level", 0),
+        "marker": getattr(block, "marker", None),
+        "rows": _table_rows_for_render_item(block),
+        "column_count": _table_column_count(block),
+        "support": block.support,
+        "language": getattr(block, "language", None),
+        "source_format": getattr(block, "source_format", None),
+        "display": getattr(block, "display", None),
     }
 
 
-def _sample_id_for_block(block: dict, style_mapping: dict) -> str | None:
-    block_type = block["type"]
+def _sample_id_for_block(block: MarkdownBlock, style_mapping: dict) -> str | None:
+    block_type = block.block_type
     if block_type == "table":
         return style_mapping.get("table_cell") or style_mapping.get("paragraph") or style_mapping.get("table")
     if block_type == "code_block":
@@ -229,11 +233,23 @@ def _item_to_table_ir(item: dict) -> TableIR:
     return TableIR(rows=rows)
 
 
-def _render_text(block: dict) -> str:
-    if block["type"] == "list_item":
-        marker = block.get("marker") or "-"
-        return f"{marker} {block['text']}"
-    return block["text"]
+def _render_text(block: MarkdownBlock) -> str:
+    if isinstance(block, ListItemBlock):
+        marker = block.marker or "-"
+        return f"{marker} {block.text}"
+    return block.text
+
+
+def _table_rows_for_render_item(block: MarkdownBlock) -> list[list[dict]] | None:
+    if not isinstance(block, TableBlock):
+        return None
+    return [[cell.to_dict() for cell in row] for row in block.rows]
+
+
+def _table_column_count(block: MarkdownBlock) -> int | None:
+    if not isinstance(block, TableBlock):
+        return None
+    return max((len(row) for row in block.rows), default=0)
 
 
 def _parse_inline_runs(text: str) -> list[RunIR]:
@@ -275,13 +291,13 @@ def _append_text_runs(runs: list[RunIR], text: str, bold: bool) -> None:
         runs.append(RunIR.text_run("".join(token), bold=bold))
 
 
-def _diagnostic(block: dict, level: str, code: str, message: str, support: SupportStatus) -> Diagnostic:
+def _diagnostic(block: MarkdownBlock, level: str, code: str, message: str, support: SupportStatus) -> Diagnostic:
     return Diagnostic(
         level=level,
         code=code,
         message=message,
-        block_id=block.get("block_id"),
-        line_start=block.get("line_start"),
-        line_end=block.get("line_end"),
+        block_id=block.block_id,
+        line_start=block.line_start,
+        line_end=block.line_end,
         support=support,
     )

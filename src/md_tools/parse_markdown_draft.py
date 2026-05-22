@@ -1,11 +1,11 @@
 try:
     from docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
     from docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
-    from docx_compiler.markdown_parser import parse_markdown_blocks
+    from docx_compiler.markdown_parser import blocks_to_dicts, parse_markdown_blocks
 except ModuleNotFoundError:
     from src.docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
     from src.docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
-    from src.docx_compiler.markdown_parser import parse_markdown_blocks
+    from src.docx_compiler.markdown_parser import blocks_to_dicts, parse_markdown_blocks
 
 from .common import json_result, read_markdown_text
 
@@ -17,8 +17,11 @@ def parse_markdown_draft(markdown_path: str) -> str:
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 
-    blocks = normalize_block_support(parse_markdown_blocks(content))
-    diagnostics = diagnostics_for_blocks(blocks)
+    ast_blocks = normalize_block_support(parse_markdown_blocks(content))
+    blocks = blocks_to_dicts(ast_blocks)
+    for block in blocks:
+        block["supported"] = block.get("support") != "rejected"
+    diagnostics = diagnostics_for_blocks(ast_blocks)
     unsupported = [block for block in blocks if block.get("support") == "rejected"]
     type_counts = {}
     for block in blocks:
