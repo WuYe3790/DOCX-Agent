@@ -135,13 +135,12 @@ def state_prompt(state: str, available_tool_schemas) -> str:
         state_rule = """
 当前状态：Word 写入。
 用户已经确认 Markdown 草稿。你现在只能读取 Word 结构、读取/解析/修订 Markdown 片段、调用 markdown_to_word 编译写入，并用 diff_docx 验证。
-不要调用直接文本替换、段落插入、表格直接替换、缩进、清空、删行、插表、插列、合并等底层工具；当前状态也不会暴露这些工具。
-写入前必须用 read_docx_structure 确认目标表格坐标，并用 parse_markdown_draft 确认 Markdown IR。
-如果一个 Markdown 文件中有多个目标片段，调用 markdown_to_word 时在 actions 中用 include_block_ids 或 line_start/line_end 选择局部块。
-如果现有 Markdown 片段不适合写入，可以用 write_markdown_draft 生成或覆盖一个更小的片段文件；这只能用于修订 Markdown，不能绕过渲染工具直接编辑 docx。
-然后由你基于样式审核结果选择 style_mapping，调用 markdown_to_word 写入 Word。
-style_mapping 示例：heading1=章节标题样本，heading2=子标题样本，paragraph/list_item=正文样本。
-段落缩进、新建普通表格、单元格内嵌套表格、插入列、横向合并、删除整行、清空单元格都通过 markdown_to_word 的 actions 表达。
+写入前用 read_docx_structure 确认目标位置，用 parse_markdown_draft 确认 Markdown block_id/support/diagnostics。
+普通正文写入用 write_markdown_after_paragraph；表格单元格写入用 write_markdown_to_table_cell；删除旧占位文字优先用 delete_text。
+短文本替换用 replace_text，锚点后追加短文本用 insert_text_at；表格和格式调整也通过 markdown_to_word.actions 表达。
+一个 Markdown 文件有多个区域时，用 include_block_ids 或 line_start/line_end 选择局部块。
+不要引用 markdown_to_word 返回的 temporary_output_path；多步编辑应放在同一次 markdown_to_word.actions 中。
+如果 Markdown 片段不适合写入，可以用 write_markdown_draft 修订草稿，但不能绕过 markdown_to_word 直接编辑 docx。
 写入后必须调用 diff_docx 验证变化。
 """.strip()
 
@@ -157,7 +156,7 @@ SYSTEM_PROMPT = f"""
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
 5. 长内容生成先写 Markdown 草稿到 out/drafts，再解析 Markdown IR，由模型决定 style_mapping 和目标位置，最后调用 markdown_to_word 编译写入。
-6. 表格工具的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。
+6. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 paragraph_index。
 7. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
