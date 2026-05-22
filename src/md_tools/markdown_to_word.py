@@ -1,58 +1,18 @@
 import json
 from pathlib import Path
 
-try:
-    from docx_tools.clear_table_cell import clear_table_cell
-    from docx_tools.delete_table_row import delete_table_row
-    from docx_tools.delete_text import delete_text
-    from docx_tools.insert_paragraph_after import insert_paragraph_after
-    from docx_tools.insert_paragraph_after_like_sample import insert_paragraph_after_like_sample
-    from docx_tools.insert_table_after_paragraph import insert_table_after_paragraph
-    from docx_tools.insert_table_column_after import insert_table_column_after
-    from docx_tools.insert_table_in_cell import insert_table_in_cell
-    from docx_tools.insert_table_row_after import insert_table_row_after
-    from docx_tools.insert_text_at import insert_text_at
-    from docx_tools.insert_text_in_table_cell import insert_text_in_table_cell
-    from docx_tools.merge_table_cells_horizontal import merge_table_cells_horizontal
-    from docx_tools.replace_table_cell_like_sample import replace_table_cell_like_sample
-    from docx_tools.replace_table_cell_text import replace_table_cell_text
-    from docx_tools.replace_text import replace_text
-    from docx_tools.replace_text_like_sample import replace_text_like_sample
-    from docx_tools.set_paragraph_indent import set_paragraph_indent
-    from docx_tools.set_text_format import set_text_format
-except ModuleNotFoundError:
-    from src.docx_tools.clear_table_cell import clear_table_cell
-    from src.docx_tools.delete_table_row import delete_table_row
-    from src.docx_tools.delete_text import delete_text
-    from src.docx_tools.insert_paragraph_after import insert_paragraph_after
-    from src.docx_tools.insert_paragraph_after_like_sample import insert_paragraph_after_like_sample
-    from src.docx_tools.insert_table_after_paragraph import insert_table_after_paragraph
-    from src.docx_tools.insert_table_column_after import insert_table_column_after
-    from src.docx_tools.insert_table_in_cell import insert_table_in_cell
-    from src.docx_tools.insert_table_row_after import insert_table_row_after
-    from src.docx_tools.insert_text_at import insert_text_at
-    from src.docx_tools.insert_text_in_table_cell import insert_text_in_table_cell
-    from src.docx_tools.merge_table_cells_horizontal import merge_table_cells_horizontal
-    from src.docx_tools.replace_table_cell_like_sample import replace_table_cell_like_sample
-    from src.docx_tools.replace_table_cell_text import replace_table_cell_text
-    from src.docx_tools.replace_text import replace_text
-    from src.docx_tools.replace_text_like_sample import replace_text_like_sample
-    from src.docx_tools.set_paragraph_indent import set_paragraph_indent
-    from src.docx_tools.set_text_format import set_text_format
-
-from .apply_markdown_ir_after_paragraph import apply_markdown_ir_after_paragraph
+from .apply_markdown_ir_after_paragraph import apply_markdown_ir_to_paragraph
 from .apply_markdown_ir_to_table_cell import apply_markdown_ir_to_table_cell
 from .common import json_result
 
 
-TABLE_SHAPE_ALIASES = {"rows", "cols", "n_rows", "n_cols", "rows_count", "cols_count"}
 ACTION_GUIDE = """
-常用 actions:
-- 写 Markdown: write_markdown_after_paragraph(target.paragraph_index), write_markdown_to_table_cell(target.table_index,row_index,cell_index)。可用 include_block_ids 或 line_start/line_end 选择局部块。
-- 文本: delete_text(target_text), replace_text(old_text,new_text), insert_text_at(anchor_text,insert_text)。
-- 表格: insert_table_after_paragraph(target.paragraph_index,cell_texts), insert_table_in_cell(target.table_index,row_index,cell_index,cell_texts), insert_table_row_after, insert_table_column_after, merge_table_cells_horizontal, clear_table_cell, delete_table_row。
-- 格式: set_text_format(target_text), set_paragraph_indent(target.paragraph_index)。
-规则: 删除占位文字优先用 delete_text；创建表格只用 cell_texts，不要用 rows/n_rows/rows_count；不要把 temporary_output_path 当作下一次输入。
+可用 actions 只有两个:
+- write_markdown_to_paragraph: 把 Markdown block 编译写入普通正文段落。target 可用 paragraph_index 或 anchor_text；mode 默认为 replace，也可设为 after。
+- write_markdown_to_table_cell: 把 Markdown block 编译写入表格单元格。target 使用 table_index、row_index、cell_index。
+两个 action 都可用 include_block_ids 或 line_start/line_end 选择 Markdown 局部块。
+规则: 填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace。
+不要把 temporary_output_path 当作下一次输入。
 """.strip()
 
 
@@ -171,8 +131,8 @@ def _run_action(
             default_style_profile_path,
             default_style_mapping,
         )
-    if action_type == "write_markdown_after_paragraph":
-        return _run_markdown_after_paragraph_action(
+    if action_type == "write_markdown_to_paragraph":
+        return _run_markdown_paragraph_action(
             payload,
             action_index,
             docx_path,
@@ -182,28 +142,7 @@ def _run_action(
             default_style_mapping,
         )
 
-    if action_type in TABLE_ACTIONS:
-        invalid = sorted(TABLE_SHAPE_ALIASES & set(payload))
-        if invalid:
-            return json_result(
-                {
-                    "status": "error",
-                    "message": f"action {action_index} 不支持参数: {', '.join(invalid)}；请使用 cell_texts",
-                    "action_guide": ACTION_GUIDE,
-                }
-            )
-        if "cell_texts" in TABLE_ACTIONS[action_type]["required"] and not payload.get("cell_texts"):
-            return json_result({"status": "error", "message": f"action {action_index} 缺少参数: cell_texts；cell_texts 不能为空"})
-
-    spec = ACTIONS.get(action_type)
-    if spec is None:
-        return json_result({"status": "error", "message": f"unsupported action type: {action_type}", "action_guide": ACTION_GUIDE})
-    validation_payload = {**payload, "__allow_empty_required__": spec.get("allow_empty_required", [])}
-    missing = _missing_required(validation_payload, spec["required"])
-    if missing:
-        return json_result({"status": "error", "message": f"action {action_index} 缺少参数: {', '.join(missing)}", "action_guide": ACTION_GUIDE})
-    kwargs = _kwargs_for_action(payload, spec["required"], spec["optional"])
-    return spec["func"](docx_path=docx_path, output_path=output_path, **kwargs)
+    return json_result({"status": "error", "message": f"unsupported action type: {action_type}", "action_guide": ACTION_GUIDE})
 
 
 def _run_markdown_table_cell_action(
@@ -244,7 +183,7 @@ def _run_markdown_table_cell_action(
     )
 
 
-def _run_markdown_after_paragraph_action(
+def _run_markdown_paragraph_action(
     payload: dict,
     action_index: int,
     docx_path: str,
@@ -256,24 +195,30 @@ def _run_markdown_after_paragraph_action(
     markdown_path = payload.get("markdown_path") or default_markdown_path
     style_profile_path = payload.get("style_profile_path") or default_style_profile_path
     style_mapping = payload.get("style_mapping") or default_style_mapping
+    mode = payload.get("mode", "replace")
+    has_anchor = payload.get("paragraph_index") is not None or payload.get("anchor_text")
     missing = _missing_required(
         {
             **payload,
             "markdown_path": markdown_path,
             "style_profile_path": style_profile_path,
             "style_mapping": style_mapping,
+            "target": "ok" if has_anchor else None,
         },
-        ["markdown_path", "style_profile_path", "style_mapping", "paragraph_index"],
+        ["markdown_path", "style_profile_path", "style_mapping", "target"],
     )
     if missing:
         return json_result({"status": "error", "message": f"action {action_index} 缺少参数: {', '.join(missing)}", "action_guide": ACTION_GUIDE})
-    return apply_markdown_ir_after_paragraph(
+    return apply_markdown_ir_to_paragraph(
         docx_path=docx_path,
         output_path=output_path,
-        paragraph_index=int(payload["paragraph_index"]),
         markdown_path=markdown_path,
         style_profile_path=style_profile_path,
         style_mapping=style_mapping,
+        paragraph_index=payload.get("paragraph_index"),
+        anchor_text=payload.get("anchor_text"),
+        occurrence=int(payload.get("occurrence", 1)),
+        mode=mode,
         include_block_ids=payload.get("include_block_ids"),
         line_start=payload.get("line_start"),
         line_end=payload.get("line_end"),
@@ -304,14 +249,6 @@ def _missing_required(payload: dict, required: list[str]) -> list[str]:
     return missing
 
 
-def _kwargs_for_action(payload: dict, required: list[str], optional: list[str]) -> dict:
-    kwargs = {}
-    for name in required + optional:
-        if name in payload:
-            kwargs[name] = _coerce_action_value(name, payload[name])
-    return kwargs
-
-
 def _response_result(parsed: dict, is_final_action: bool, output_path: str) -> dict:
     result = dict(parsed)
     if not is_final_action:
@@ -320,12 +257,6 @@ def _response_result(parsed: dict, is_final_action: bool, output_path: str) -> d
         result["temporary_output_cleaned"] = True
         result["hint"] = "这是 markdown_to_word 的中间输出，调用结束后会被清理；后续 action 会自动接收它，不要在新的工具调用中引用该路径。"
     return result
-
-
-def _coerce_action_value(name: str, value):
-    if name in INTEGER_FIELDS and value is not None:
-        return int(value)
-    return value
 
 
 def _action_type(action: dict) -> str:
@@ -345,137 +276,18 @@ def _temp_paths(output_path: Path, action_count: int) -> list[Path]:
     return [output_path.with_name(f".{output_path.stem}.step{index}{output_path.suffix}") for index in range(1, action_count)]
 
 
-INTEGER_FIELDS = {
-    "table_index",
-    "row_index",
-    "cell_index",
-    "column_index",
-    "paragraph_index",
-    "start_cell_index",
-    "span",
-    "occurrence",
-    "offset",
-    "left_twips",
-    "first_line_twips",
-    "hanging_twips",
-    "font_size_half_points",
-}
-FORMAT_OPTIONS = ["newline_mode", "format_policy", "color", "bold", "font_size_half_points", "font_size_pt"]
-ACTIONS = {
-    "replace_text": {
-        "func": replace_text,
-        "required": ["old_text", "new_text"],
-        "optional": ["occurrence", *FORMAT_OPTIONS],
-        "allow_empty_required": ["new_text"],
-    },
-    "replace_text_like_sample": {
-        "func": replace_text_like_sample,
-        "required": ["old_text", "new_text", "style_profile_path", "sample_id"],
-        "optional": ["occurrence", "newline_mode"],
-    },
-    "insert_text_at": {
-        "func": insert_text_at,
-        "required": ["anchor_text", "insert_text"],
-        "optional": ["offset", "occurrence", *FORMAT_OPTIONS],
-    },
-    "delete_text": {
-        "func": delete_text,
-        "required": ["target_text"],
-        "optional": ["occurrence", "trim_surrounding_spaces"],
-    },
-    "set_text_format": {
-        "func": set_text_format,
-        "required": ["target_text"],
-        "optional": ["occurrence", "format_policy", "color", "bold", "font_size_half_points", "font_size_pt"],
-    },
-    "insert_paragraph_after": {
-        "func": insert_paragraph_after,
-        "required": ["anchor_text", "new_text"],
-        "optional": ["occurrence", "style_source", *FORMAT_OPTIONS],
-    },
-    "insert_paragraph_after_like_sample": {
-        "func": insert_paragraph_after_like_sample,
-        "required": ["anchor_text", "new_text", "style_profile_path", "sample_id"],
-        "optional": ["occurrence", "style_source", "newline_mode"],
-    },
-    "replace_table_cell_text": {
-        "func": replace_table_cell_text,
-        "required": ["table_index", "row_index", "cell_index", "new_text"],
-        "optional": FORMAT_OPTIONS,
-    },
-    "replace_table_cell_like_sample": {
-        "func": replace_table_cell_like_sample,
-        "required": ["table_index", "row_index", "cell_index", "new_text", "style_profile_path", "sample_id"],
-        "optional": ["newline_mode"],
-    },
-    "insert_text_in_table_cell": {
-        "func": insert_text_in_table_cell,
-        "required": ["table_index", "row_index", "cell_index", "insert_text"],
-        "optional": ["paragraph_index", "append", *FORMAT_OPTIONS],
-    },
-    "clear_table_cell": {
-        "func": clear_table_cell,
-        "required": ["table_index", "row_index", "cell_index"],
-        "optional": [],
-    },
-    "delete_table_row": {
-        "func": delete_table_row,
-        "required": ["table_index", "row_index"],
-        "optional": ["expected_row_text_contains"],
-    },
-    "insert_table_row_after": {
-        "func": insert_table_row_after,
-        "required": ["table_index", "row_index", "cell_texts"],
-        "optional": ["copy_from", *FORMAT_OPTIONS],
-    },
-    "insert_table_after_paragraph": {
-        "func": insert_table_after_paragraph,
-        "required": ["paragraph_index", "cell_texts"],
-        "optional": ["column_widths_twips"],
-    },
-    "insert_table_in_cell": {
-        "func": insert_table_in_cell,
-        "required": ["table_index", "row_index", "cell_index", "cell_texts"],
-        "optional": ["column_widths_twips"],
-    },
-    "insert_table_column_after": {
-        "func": insert_table_column_after,
-        "required": ["table_index", "column_index"],
-        "optional": ["cell_texts", "copy_from"],
-    },
-    "merge_table_cells_horizontal": {
-        "func": merge_table_cells_horizontal,
-        "required": ["table_index", "row_index", "start_cell_index", "span"],
-        "optional": [],
-    },
-    "set_paragraph_indent": {
-        "func": set_paragraph_indent,
-        "required": ["paragraph_index"],
-        "optional": ["left_twips", "first_line_twips", "hanging_twips"],
-    },
-}
-TABLE_ACTIONS = {
-    key: ACTIONS[key]
-    for key in {
-        "insert_table_after_paragraph",
-        "insert_table_in_cell",
-        "insert_table_row_after",
-    }
-}
-
-
 tools_schema = {
     "type": "function",
     "function": {
         "name": "markdown_to_word",
-        "description": "统一 Word 写入入口。用 actions 顺序执行 Markdown 编译写入、文本编辑、段落编辑、表格结构编辑和格式编辑；底层写入工具不应由 agent 直接调用。\n" + ACTION_GUIDE,
+        "description": "统一 Word 写入入口。只接收 Markdown 编译型写入 action。\n" + ACTION_GUIDE,
         "parameters": {
             "type": "object",
             "properties": {
                 "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
                 "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
                 "markdown_path": {"type": "string", "description": "默认 Markdown 草稿路径；Markdown 类 action 可覆盖"},
-                "style_profile_path": {"type": "string", "description": "默认样式画像 JSON 路径；Markdown 类和样式仿写类 action 可覆盖"},
+                "style_profile_path": {"type": "string", "description": "默认样式画像 JSON 路径；action 可覆盖"},
                 "style_mapping": {
                     "type": "object",
                     "description": "默认 Markdown block 类型到 sample_id 的映射，例如 paragraph/list_item -> S001",
@@ -483,7 +295,7 @@ tools_schema = {
                 },
                 "actions": {
                     "type": "array",
-                    "description": "顺序执行的写入动作数组。每个 action 必须有 type；坐标字段可直接放在 action 上，也可放在 target 对象中。Markdown 类 action 可用 include_block_ids 或 line_start/line_end 选择局部块。",
+                    "description": "顺序执行的 Markdown 写入动作数组。每个 action 必须有 type；坐标字段可直接放在 action 上，也可放在 target 对象中。可用 include_block_ids 或 line_start/line_end 选择局部块。",
                     "items": {"type": "object", "additionalProperties": True},
                 },
             },

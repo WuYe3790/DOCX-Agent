@@ -136,8 +136,8 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 当前状态：Word 写入。
 用户已经确认 Markdown 草稿。你现在只能读取 Word 结构、读取/解析/修订 Markdown 片段、调用 markdown_to_word 编译写入，并用 diff_docx 验证。
 写入前用 read_docx_structure 确认目标位置，用 parse_markdown_draft 确认 Markdown block_id/support/diagnostics。
-普通正文写入用 write_markdown_after_paragraph；表格单元格写入用 write_markdown_to_table_cell；删除旧占位文字优先用 delete_text。
-短文本替换用 replace_text，锚点后追加短文本用 insert_text_at；表格和格式调整也通过 markdown_to_word.actions 表达。
+普通正文写入只用 write_markdown_to_paragraph；表格单元格写入只用 write_markdown_to_table_cell。
+填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace；需要在标题后追加内容时，用 mode=after。
 一个 Markdown 文件有多个区域时，用 include_block_ids 或 line_start/line_end 选择局部块。
 不要引用 markdown_to_word 返回的 temporary_output_path；多步编辑应放在同一次 markdown_to_word.actions 中。
 如果 Markdown 片段不适合写入，可以用 write_markdown_draft 修订草稿，但不能绕过 markdown_to_word 直接编辑 docx。
@@ -156,7 +156,7 @@ SYSTEM_PROMPT = f"""
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
 5. 长内容生成先写 Markdown 草稿到 out/drafts，再解析 Markdown IR，由模型决定 style_mapping 和目标位置，最后调用 markdown_to_word 编译写入。
-6. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 paragraph_index。
+6. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph，可用 paragraph_index 或 anchor_text 定位。
 7. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
