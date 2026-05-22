@@ -14,7 +14,6 @@ class MarkdownBlock:
     line_start: int = 1
     line_end: int = 1
     raw: str = ""
-    supported: bool = True
     support: str | None = None
 
     @property
@@ -29,7 +28,6 @@ class MarkdownBlock:
             "line_start": self.line_start,
             "line_end": self.line_end,
             "raw": self.raw,
-            "supported": self.supported,
         }
         if self.support:
             data["support"] = self.support
@@ -247,7 +245,6 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[Markdown
                     token.content,
                     token,
                     lines,
-                    supported=True,
                     support="degraded",
                     language=(token.info or "").strip() or None,
                 )
@@ -256,12 +253,12 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[Markdown
             continue
 
         if token.type == "code_block":
-            blocks.append(_block_from_token(CodeBlock, token.content, token, lines, supported=True, support="degraded"))
+            blocks.append(_block_from_token(CodeBlock, token.content, token, lines, support="degraded"))
             index += 1
             continue
 
         if token.type == "html_block":
-            blocks.append(_block_from_token(HtmlBlock, token.content, token, lines, supported=False, support="rejected"))
+            blocks.append(_block_from_token(HtmlBlock, token.content, token, lines, support="rejected"))
             index += 1
             continue
 
@@ -272,10 +269,10 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[Markdown
     return blocks
 
 
-def _block_from_token(block_cls, text: str, token, lines: list[str], supported: bool = True, **extra) -> MarkdownBlock:
+def _block_from_token(block_cls, text: str, token, lines: list[str], **extra) -> MarkdownBlock:
     line_start, line_end = _line_range(token)
     raw = _raw_text(token, lines)
-    return block_cls(text=text, line_start=line_start, line_end=line_end, raw=raw, supported=supported, **extra)
+    return block_cls(text=text, line_start=line_start, line_end=line_end, raw=raw, **extra)
 
 
 def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: list[str]) -> TableBlock:
@@ -333,7 +330,6 @@ def _formula_block_from_token(token, inline, lines: list[str]) -> FormulaBlock |
         line_start=line_start,
         line_end=line_end,
         raw=_raw_text(token, lines),
-        supported=True,
         support="degraded",
         source_format="latex",
         display=True,
