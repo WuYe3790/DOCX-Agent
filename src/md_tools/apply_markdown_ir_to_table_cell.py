@@ -10,7 +10,8 @@ try:
         write_document_xml,
     )
     from docx_tools.style_profile import load_style_sample
-    from docx_compiler.ir import CellIR, ParagraphIR, RunIR, TableIR, TableRowIR
+    from docx_compiler.diagnostics import diagnostics_to_dicts, has_errors
+    from docx_compiler.lower import filter_blocks, lower_markdown_blocks, normalize_block_support
     from docx_compiler.render import render_blocks_to_container
 except ModuleNotFoundError:
     from src.docx_tools.common import (
@@ -24,13 +25,11 @@ except ModuleNotFoundError:
         write_document_xml,
     )
     from src.docx_tools.style_profile import load_style_sample
-    from src.docx_compiler.ir import CellIR, ParagraphIR, RunIR, TableIR, TableRowIR
+    from src.docx_compiler.diagnostics import diagnostics_to_dicts, has_errors
+    from src.docx_compiler.lower import filter_blocks, lower_markdown_blocks, normalize_block_support
     from src.docx_compiler.render import render_blocks_to_container
 
 from .common import parse_markdown_blocks, read_markdown_text
-
-
-SUPPORTED_TYPES = {"heading1", "heading2", "paragraph", "list_item", "table"}
 
 
 def apply_markdown_ir_to_table_cell(
@@ -52,38 +51,28 @@ def apply_markdown_ir_to_table_cell(
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 
-    all_blocks = parse_markdown_blocks(content)
+    all_blocks = normalize_block_support(parse_markdown_blocks(content))
     try:
-        blocks = _filter_blocks(all_blocks, include_block_ids, line_start, line_end)
+        blocks = filter_blocks(all_blocks, include_block_ids, line_start, line_end)
     except ValueError as exc:
         return json_result({"status": "error", "message": str(exc), "markdown_path": str(target)})
 
-    unsupported = [block for block in blocks if block["type"] not in SUPPORTED_TYPES or not block.get("supported", True)]
-    if unsupported:
+    lowering = lower_markdown_blocks(blocks, style_mapping)
+    diagnostics = diagnostics_to_dicts(lowering.diagnostics)
+    if has_errors(lowering.diagnostics):
         return json_result(
             {
-                "status": "unsupported_markdown",
-                "message": "暂不支持代码块、HTML 等复杂块；Markdown 表格、标题、正文和列表可直接编译。",
+                "status": "rejected_markdown",
+                "message": "Markdown 语义检查失败，存在无法写入的块或缺失样式映射。",
                 "markdown_path": str(target),
                 "selected_block_count": len(blocks),
-                "unsupported_blocks": [
-                    {
-                        "block_id": block["block_id"],
-                        "type": block["type"],
-                        "line_start": block["line_start"],
-                        "line_end": block["line_end"],
-                        "raw": block["raw"],
-                    }
-                    for block in unsupported
-                ],
-                "hint": "可以用 include_block_ids 或 line_start/line_end 只选择不含表格的块，或用 write_markdown_draft 生成简化片段。",
+                "support_summary": lowering.support_summary,
+                "diagnostics": diagnostics,
+                "hint": "可以用 include_block_ids 或 line_start/line_end 只选择可写入的块，或补充 style_mapping。",
             }
         )
 
-    render_items, style_sample_ids = _build_render_items(blocks, style_mapping)
-    if isinstance(render_items, str):
-        return render_items
-    if not render_items:
+    if not lowering.render_items:
         return json_result({"status": "error", "message": "Markdown 草稿没有可写入内容", "markdown_path": str(target)})
 
     root = load_document_xml(docx_path)
@@ -95,15 +84,13 @@ def apply_markdown_ir_to_table_cell(
         return json_result({"status": "error", "message": str(exc)})
 
     try:
-        style_samples = {sample_id: load_style_sample(style_profile_path, sample_id) for sample_id in sorted(style_sample_ids)}
+        style_samples = {sample_id: load_style_sample(style_profile_path, sample_id) for sample_id in sorted(lowering.style_sample_ids)}
     except (FileNotFoundError, KeyError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc), "style_profile_path": style_profile_path})
 
     before_table = table_summary(table)
     before_text = cell_text(cell)
-    layout_blocks = _items_to_layout_ir(render_items)
-
-    render_blocks_to_container(cell, layout_blocks, style_samples=style_samples, clear_existing=True)
+    render_blocks_to_container(cell, lowering.layout_blocks, style_samples=style_samples, clear_existing=True)
 
     after_text = cell_text(cell)
     write_document_xml(docx_path, output_path, root)
@@ -123,178 +110,15 @@ def apply_markdown_ir_to_table_cell(
             "line_end": line_end,
             "before_text": before_text,
             "after_text": after_text,
-            "written_block_count": len(render_items),
-            "written_blocks": render_items,
-            "layout_ir_block_count": len(layout_blocks),
+            "written_block_count": len(lowering.render_items),
+            "written_blocks": lowering.render_items,
+            "layout_ir_block_count": len(lowering.layout_blocks),
+            "support_summary": lowering.support_summary,
+            "diagnostics": diagnostics,
             "before_table": before_table,
             "after_table": table_summary(table),
         }
     )
-
-
-def _build_render_items(blocks: list[dict], style_mapping: dict):
-    render_items = []
-    style_sample_ids = set()
-    for block in blocks:
-        block_type = block["type"]
-        sample_id = _sample_id_for_block(block, style_mapping)
-        if not sample_id:
-            return (
-                json_result(
-                    {
-                        "status": "error",
-                        "message": f"style_mapping 缺少 {block_type}",
-                        "required_mapping_keys": sorted({block["type"] for block in blocks}),
-                    }
-                ),
-                style_sample_ids,
-            )
-        if sample_id:
-            style_sample_ids.add(sample_id)
-        render_items.append(
-            {
-                "block_id": block["block_id"],
-                "type": block_type,
-                "text": _render_text(block),
-                "sample_id": sample_id,
-                "line_start": block["line_start"],
-                "line_end": block["line_end"],
-                "indent_level": block.get("indent_level", 0),
-                "marker": block.get("marker"),
-                "rows": block.get("rows"),
-                "column_count": block.get("column_count"),
-            }
-        )
-    return render_items, style_sample_ids
-
-
-def _sample_id_for_block(block: dict, style_mapping: dict) -> str | None:
-    block_type = block["type"]
-    if block_type == "table":
-        return style_mapping.get("table_cell") or style_mapping.get("paragraph") or style_mapping.get("table")
-    return style_mapping.get(block_type)
-
-
-def _filter_blocks(
-    blocks: list[dict],
-    include_block_ids: list[str] | None,
-    line_start: int | None,
-    line_end: int | None,
-) -> list[dict]:
-    if include_block_ids and (line_start is not None or line_end is not None):
-        raise ValueError("include_block_ids 和 line_start/line_end 不能同时使用")
-    if line_start is not None and line_end is not None and line_end < line_start:
-        raise ValueError("line_end must be >= line_start")
-
-    if include_block_ids:
-        wanted = {str(block_id) for block_id in include_block_ids}
-        selected = [block for block in blocks if block["block_id"] in wanted]
-        missing = sorted(wanted - {block["block_id"] for block in selected})
-        if missing:
-            raise ValueError(f"include_block_ids not found: {', '.join(missing)}")
-        return selected
-
-    if line_start is not None or line_end is not None:
-        start = line_start if line_start is not None else 1
-        end = line_end if line_end is not None else 10**9
-        return [block for block in blocks if block["line_start"] >= start and block["line_end"] <= end]
-
-    return blocks
-
-
-def _render_text(block: dict) -> str:
-    if block["type"] == "list_item":
-        marker = block.get("marker") or "-"
-        return f"{marker} {block['text']}"
-    return block["text"]
-
-
-def _items_to_layout_ir(items: list[dict]) -> list[ParagraphIR | TableIR]:
-    blocks = []
-    previous = None
-    for item in items:
-        if previous is not None and item["line_start"] > previous["line_end"] + 1:
-            blocks.append(ParagraphIR(runs=[]))
-        if item["type"] == "table":
-            blocks.append(_item_to_table_ir(item))
-        else:
-            blocks.append(
-                ParagraphIR(
-                    runs=_parse_inline_runs(item["text"]),
-                    style_sample_id=item["sample_id"],
-                    block_id=item["block_id"],
-                    block_type=item["type"],
-                    line_start=item["line_start"],
-                    line_end=item["line_end"],
-                    list_level=int(item.get("indent_level", 0)) if item["type"] == "list_item" else None,
-                list_marker=item.get("marker"),
-                )
-            )
-        previous = item
-    return blocks
-
-
-def _item_to_table_ir(item: dict) -> TableIR:
-    rows = []
-    for row in item.get("rows") or []:
-        cells = []
-        for cell in row:
-            text = cell.get("text", "") if isinstance(cell, dict) else str(cell)
-            cells.append(
-                CellIR(
-                    blocks=[
-                        ParagraphIR(
-                            runs=_parse_inline_runs(text),
-                            style_sample_id=item.get("sample_id"),
-                            block_id=item["block_id"],
-                            block_type="table_cell",
-                            line_start=item["line_start"],
-                            line_end=item["line_end"],
-                        )
-                    ]
-                )
-            )
-        rows.append(TableRowIR(cells=cells))
-    return TableIR(rows=rows)
-
-
-def _parse_inline_runs(text: str) -> list[RunIR]:
-    """解析最小 Markdown 加粗语法；未闭合的 ** 按普通文本处理。"""
-    runs = []
-    cursor = 0
-    while cursor < len(text):
-        start = text.find("**", cursor)
-        if start == -1:
-            _append_text_runs(runs, text[cursor:], bold=False)
-            break
-        if start > cursor:
-            _append_text_runs(runs, text[cursor:start], bold=False)
-        end = text.find("**", start + 2)
-        if end == -1:
-            _append_text_runs(runs, text[start:], bold=False)
-            break
-        _append_text_runs(runs, text[start + 2 : end], bold=True)
-        cursor = end + 2
-    return runs
-
-
-def _append_text_runs(runs: list[RunIR], text: str, bold: bool) -> None:
-    token = []
-    for char in text:
-        if char == "\t":
-            if token:
-                runs.append(RunIR.text_run("".join(token), bold=bold))
-                token = []
-            runs.append(RunIR.tab())
-        elif char == "\n":
-            if token:
-                runs.append(RunIR.text_run("".join(token), bold=bold))
-                token = []
-            runs.append(RunIR.line_break())
-        else:
-            token.append(char)
-    if token:
-        runs.append(RunIR.text_run("".join(token), bold=bold))
 
 
 tools_schema = {

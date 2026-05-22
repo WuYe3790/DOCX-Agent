@@ -54,7 +54,7 @@ class ParagraphIR:
 
 @dataclass
 class CellIR:
-    blocks: list[ParagraphIR | "TableIR"] = field(default_factory=list)
+    blocks: list[ParagraphIR | "TableIR" | "CodeBlockIR" | "FormulaIR"] = field(default_factory=list)
     width_twips: int | None = None
 
 
@@ -67,3 +67,26 @@ class TableRowIR:
 class TableIR:
     rows: list[TableRowIR] = field(default_factory=list)
     column_widths_twips: list[int] = field(default_factory=list)
+
+
+@dataclass
+class CodeBlockIR:
+    code: str
+    language: str | None = None
+    style_sample_id: str | None = None
+    block_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    render_mode: str = "code_paragraphs"
+
+
+@dataclass
+class FormulaIR:
+    source: str
+    source_format: str = "latex"
+    display: bool = True
+    style_sample_id: str | None = None
+    block_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    render_mode: str = "plain_text_fallback"

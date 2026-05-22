@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 try:
@@ -90,6 +91,11 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
 
         if token.type == "paragraph_open":
             inline = _next_inline(tokens, index)
+            formula = _formula_block_from_token(token, inline, lines)
+            if formula is not None and not list_stack:
+                blocks.append(formula)
+                index = _skip_until(tokens, index, "paragraph_close") + 1
+                continue
             if list_stack:
                 blocks.append(
                     _block_from_token(
@@ -100,10 +106,19 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
                         marker=list_stack[-1].get("current_marker") or _next_list_marker(list_stack[-1]),
                         ordered=list_stack[-1].get("ordered", False),
                         indent_level=max(0, len(list_stack) - 1),
+                        inline_formulas=_inline_formula_sources(_inline_text(inline)),
                     )
                 )
             else:
-                blocks.append(_block_from_token("paragraph", _inline_text(inline), token, lines))
+                blocks.append(
+                    _block_from_token(
+                        "paragraph",
+                        _inline_text(inline),
+                        token,
+                        lines,
+                        inline_formulas=_inline_formula_sources(_inline_text(inline)),
+                    )
+                )
             index = _skip_until(tokens, index, "paragraph_close") + 1
             continue
 
@@ -114,17 +129,27 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
             continue
 
         if token.type == "fence":
-            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=False, info=token.info))
+            blocks.append(
+                _block_from_token(
+                    "code_block",
+                    token.content,
+                    token,
+                    lines,
+                    supported=True,
+                    support="degraded",
+                    info=(token.info or "").strip() or None,
+                )
+            )
             index += 1
             continue
 
         if token.type == "code_block":
-            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=False))
+            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=True, support="degraded"))
             index += 1
             continue
 
         if token.type == "html_block":
-            blocks.append(_block_from_token("html_block", token.content, token, lines, supported=False))
+            blocks.append(_block_from_token("html_block", token.content, token, lines, supported=False, support="rejected"))
             index += 1
             continue
 
@@ -184,6 +209,33 @@ def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: li
         header_row_count=1 if header_row_count else 0,
         column_count=max((len(row) for row in rows), default=0),
     )
+
+
+def _formula_block_from_token(token, inline, lines: list[str]) -> dict | None:
+    raw = _raw_text(token, lines).strip()
+    if not raw.startswith("$$") or not raw.endswith("$$") or len(raw) < 4:
+        return None
+    source = raw[2:-2].strip()
+    if not source:
+        source = _inline_text(inline).strip("$").strip()
+    line_start, line_end = _line_range(token)
+    return _block(
+        "formula_block",
+        source,
+        line_start,
+        line_end,
+        _raw_text(token, lines),
+        supported=True,
+        support="degraded",
+        source_format="latex",
+        display=True,
+    )
+
+
+def _inline_formula_sources(text: str) -> list[str]:
+    if not text:
+        return []
+    return [match.group(1).strip() for match in re.finditer(r"(?<!\\)\$([^$\n]+?)(?<!\\)\$", text) if match.group(1).strip()]
 
 
 def _line_range(token) -> tuple[int, int]:

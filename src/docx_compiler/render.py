@@ -21,7 +21,7 @@ except ModuleNotFoundError:
         set_text_preserve_space,
     )
 
-from .ir import CellIR, ParagraphIR, RunIR, TableIR
+from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR
 from .optimizer import optimize_paragraph
 
 DEFAULT_TABLE_WIDTH_TWIPS = 9000
@@ -30,7 +30,7 @@ MIN_COLUMN_WIDTH_TWIPS = 900
 
 def render_blocks_to_container(
     container,
-    blocks: list[ParagraphIR | TableIR],
+    blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR],
     style_samples: dict[str, dict] | None = None,
     clear_existing: bool = False,
 ) -> list:
@@ -50,10 +50,16 @@ def render_blocks_to_container(
                 style_samples=style_samples,
                 available_width_twips=container_table_width_twips(container),
             )
+        elif isinstance(block, CodeBlockIR):
+            element = render_code_block(block, style_samples=style_samples)
+        elif isinstance(block, FormulaIR):
+            element = render_formula(block, style_samples=style_samples)
         else:
             raise TypeError(f"unsupported block IR: {type(block).__name__}")
-        container.append(element)
-        rendered.append(element)
+        elements = element if isinstance(element, list) else [element]
+        for item in elements:
+            container.append(item)
+            rendered.append(item)
 
     if container.tag == f"{W}tc" and (len(container) == 1 or container[-1].tag != f"{W}p"):
         container.append(etree.Element(f"{W}p", nsmap=container.nsmap))
@@ -92,6 +98,43 @@ def render_paragraph(paragraph_ir: ParagraphIR, style_samples: dict[str, dict] |
     _apply_paragraph_indent(paragraph, paragraph_ir)
     optimize_paragraph(paragraph)
     return paragraph
+
+
+def render_code_block(code_ir: CodeBlockIR, style_samples: dict[str, dict] | None = None) -> list:
+    normalized = code_ir.code.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if not lines:
+        lines = [""]
+
+    paragraphs = []
+    for line in lines:
+        paragraph_ir = ParagraphIR(
+            runs=_code_line_runs(line),
+            style_sample_id=code_ir.style_sample_id,
+            block_id=code_ir.block_id,
+            block_type="code_block",
+            line_start=code_ir.line_start,
+            line_end=code_ir.line_end,
+        )
+        paragraph = render_paragraph(paragraph_ir, style_samples=style_samples)
+        _apply_code_format(paragraph)
+        paragraphs.append(paragraph)
+    return paragraphs
+
+
+def render_formula(formula_ir: FormulaIR, style_samples: dict[str, dict] | None = None):
+    text = formula_ir.source.strip()
+    paragraph_ir = ParagraphIR(
+        runs=_parse_text_runs(text),
+        style_sample_id=formula_ir.style_sample_id,
+        block_id=formula_ir.block_id,
+        block_type="formula_block",
+        line_start=formula_ir.line_start,
+        line_end=formula_ir.line_end,
+    )
+    return render_paragraph(paragraph_ir, style_samples=style_samples)
 
 
 def render_table(
@@ -155,6 +198,32 @@ def _append_run(paragraph, run_ir: RunIR):
     return run
 
 
+def _code_line_runs(line: str) -> list[RunIR]:
+    runs = _parse_text_runs(line)
+    return runs or [RunIR.text_run("")]
+
+
+def _parse_text_runs(text: str) -> list[RunIR]:
+    runs = []
+    token = []
+    for char in text:
+        if char == "\t":
+            if token:
+                runs.append(RunIR.text_run("".join(token)))
+                token = []
+            runs.append(RunIR.tab())
+        elif char == "\n":
+            if token:
+                runs.append(RunIR.text_run("".join(token)))
+                token = []
+            runs.append(RunIR.line_break())
+        else:
+            token.append(char)
+    if token:
+        runs.append(RunIR.text_run("".join(token)))
+    return runs
+
+
 def _append_text_fragments(run, text: str) -> None:
     token = []
     for char in text:
@@ -216,6 +285,22 @@ def _set_run_italic(run, enabled: bool) -> None:
     if enabled:
         rpr.append(etree.Element(f"{W}i"))
         rpr.append(etree.Element(f"{W}iCs"))
+
+
+def _apply_code_format(paragraph) -> None:
+    for run in paragraph.xpath("./w:r", namespaces=NS):
+        rpr = run.find(f"{W}rPr")
+        if rpr is None:
+            rpr = etree.Element(f"{W}rPr")
+            run.insert(0, rpr)
+        for child in list(rpr):
+            if child.tag == f"{W}rFonts":
+                rpr.remove(child)
+        fonts = etree.Element(f"{W}rFonts")
+        fonts.set(f"{W}ascii", "Consolas")
+        fonts.set(f"{W}hAnsi", "Consolas")
+        fonts.set(f"{W}eastAsia", "Consolas")
+        rpr.insert(0, fonts)
 
 
 def _append_default_borders(tbl_pr) -> None:

@@ -1,3 +1,10 @@
+try:
+    from docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
+    from docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
+except ModuleNotFoundError:
+    from src.docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
+    from src.docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
+
 from .common import json_result, parse_markdown_blocks, read_markdown_text
 
 
@@ -8,8 +15,9 @@ def parse_markdown_draft(markdown_path: str) -> str:
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 
-    blocks = parse_markdown_blocks(content)
-    unsupported = [block for block in blocks if not block.get("supported", True)]
+    blocks = normalize_block_support(parse_markdown_blocks(content))
+    diagnostics = diagnostics_for_blocks(blocks)
+    unsupported = [block for block in blocks if block.get("support") == "rejected"]
     type_counts = {}
     for block in blocks:
         block_type = block["type"]
@@ -22,6 +30,8 @@ def parse_markdown_draft(markdown_path: str) -> str:
             "block_count": len(blocks),
             "type_counts": type_counts,
             "unsupported_block_count": len(unsupported),
+            "support_summary": support_summary(blocks),
+            "diagnostics": diagnostics_to_dicts(diagnostics),
             "unsupported_blocks": [
                 {
                     "block_id": block["block_id"],
@@ -29,6 +39,7 @@ def parse_markdown_draft(markdown_path: str) -> str:
                     "line_start": block["line_start"],
                     "line_end": block["line_end"],
                     "raw": block["raw"],
+                    "support": block.get("support", "rejected"),
                 }
                 for block in unsupported
             ],
@@ -43,6 +54,12 @@ def parse_markdown_draft(markdown_path: str) -> str:
                     "table": _preview_table(block),
                     "indent": _preview_indent(block),
                     "supported": block.get("supported", True),
+                    "support": block.get("support", "native"),
+                    "diagnostics": [
+                        diagnostic.to_dict()
+                        for diagnostic in diagnostics
+                        if diagnostic.block_id == block["block_id"]
+                    ],
                 }
                 for block in blocks
             ],
@@ -52,6 +69,8 @@ def parse_markdown_draft(markdown_path: str) -> str:
                 "paragraph": "正文样本，如 S001",
                 "list_item": "正文样本，如 S001",
                 "table_cell": "表格内普通文本样本；未提供时使用 paragraph",
+                "code_block": "代码块样本；未提供时使用 paragraph",
+                "formula": "公式文本 fallback 样本；未提供时使用 paragraph",
             },
         }
     )
@@ -76,6 +95,8 @@ tools_schema = {
 def _preview_runs(block: dict) -> list[dict]:
     if block["type"] == "table":
         return []
+    if block["type"] == "formula_block":
+        return [{"kind": "text", "text": block.get("text", "")}]
     text = block.get("text") or ""
     if block["type"] == "list_item":
         marker = block.get("marker") or "-"

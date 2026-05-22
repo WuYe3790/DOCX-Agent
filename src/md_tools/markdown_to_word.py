@@ -39,6 +39,8 @@ def markdown_to_word(
     temp_paths = _temp_paths(output, len(actions))
     current_input = docx_path
     action_results = []
+    diagnostics = []
+    support_summary = {"native": 0, "degraded": 0, "rejected": 0}
 
     try:
         for index, action in enumerate(actions, start=1):
@@ -56,6 +58,14 @@ def markdown_to_word(
             except (KeyError, TypeError, ValueError) as exc:
                 result = json_result({"status": "error", "message": f"action {index} 参数错误: {exc}"})
             parsed = _parse_tool_result(result)
+            for diagnostic in parsed.get("diagnostics") or []:
+                item = dict(diagnostic)
+                item["action_index"] = index
+                item["action_type"] = _action_type(action)
+                diagnostics.append(item)
+            for key, value in (parsed.get("support_summary") or {}).items():
+                if key in support_summary:
+                    support_summary[key] += int(value)
             action_results.append(
                 {
                     "action_index": index,
@@ -71,6 +81,8 @@ def markdown_to_word(
                         "status": "error",
                         "message": f"action {index} failed",
                         "failed_action": action,
+                        "diagnostics": diagnostics,
+                        "support_summary": support_summary,
                         "actions": action_results,
                     }
                 )
@@ -89,6 +101,8 @@ def markdown_to_word(
             "style_profile_path": style_profile_path,
             "style_mapping": style_mapping or {},
             "action_count": len(actions),
+            "diagnostics": diagnostics,
+            "support_summary": support_summary,
             "actions": action_results,
         }
     )
