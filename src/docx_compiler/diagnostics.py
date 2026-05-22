@@ -46,7 +46,7 @@ def has_errors(diagnostics: list[Diagnostic]) -> bool:
 def support_summary(blocks: list[dict]) -> dict:
     summary = {"native": 0, "degraded": 0, "rejected": 0}
     for block in blocks:
-        support = block.get("support") or ("native" if block.get("supported", True) else "rejected")
+        support = block.get("support") or "native"
         if support not in summary:
             support = "rejected"
         summary[support] += 1

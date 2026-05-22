@@ -19,8 +19,6 @@ def parse_markdown_draft(markdown_path: str) -> str:
 
     ast_blocks = normalize_block_support(parse_markdown_blocks(content))
     blocks = blocks_to_dicts(ast_blocks)
-    for block in blocks:
-        block["supported"] = block.get("support") != "rejected"
     diagnostics = diagnostics_for_blocks(ast_blocks)
     unsupported = [block for block in blocks if block.get("support") == "rejected"]
     type_counts = {}
@@ -58,7 +56,6 @@ def parse_markdown_draft(markdown_path: str) -> str:
                     "runs": _preview_runs(block),
                     "table": _preview_table(block),
                     "indent": _preview_indent(block),
-                    "supported": block.get("supported", True),
                     "support": block.get("support", "native"),
                     "diagnostics": [
                         diagnostic.to_dict()
