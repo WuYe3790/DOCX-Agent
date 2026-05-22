@@ -10,6 +10,7 @@ from .ir import (
     TableIR,
     TableRowIR,
 )
+from .markdown_parser import parse_markdown_blocks
 from .optimizer import optimize_paragraph, optimize_tree
 from .render import render_blocks_to_container, render_paragraph, render_table
 
@@ -19,6 +20,7 @@ __all__ = [
     "FormulaIR",
     "ParagraphIR",
     "ParagraphIndent",
+    "parse_markdown_blocks",
     "RunIR",
     "TableIR",
     "TableRowIR",

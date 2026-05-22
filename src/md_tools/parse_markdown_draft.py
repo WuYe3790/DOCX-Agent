@@ -1,11 +1,13 @@
 try:
     from docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
     from docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
+    from docx_compiler.markdown_parser import parse_markdown_blocks
 except ModuleNotFoundError:
     from src.docx_compiler.diagnostics import diagnostics_to_dicts, support_summary
     from src.docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
+    from src.docx_compiler.markdown_parser import parse_markdown_blocks
 
-from .common import json_result, parse_markdown_blocks, read_markdown_text
+from .common import json_result, read_markdown_text
 
 
 def parse_markdown_draft(markdown_path: str) -> str:

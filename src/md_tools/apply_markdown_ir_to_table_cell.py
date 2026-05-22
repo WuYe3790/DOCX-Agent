@@ -12,6 +12,7 @@ try:
     from docx_tools.style_profile import load_style_sample
     from docx_compiler.diagnostics import diagnostics_to_dicts, has_errors
     from docx_compiler.lower import filter_blocks, lower_markdown_blocks, normalize_block_support
+    from docx_compiler.markdown_parser import parse_markdown_blocks
     from docx_compiler.render import render_blocks_to_container
 except ModuleNotFoundError:
     from src.docx_tools.common import (
@@ -27,9 +28,10 @@ except ModuleNotFoundError:
     from src.docx_tools.style_profile import load_style_sample
     from src.docx_compiler.diagnostics import diagnostics_to_dicts, has_errors
     from src.docx_compiler.lower import filter_blocks, lower_markdown_blocks, normalize_block_support
+    from src.docx_compiler.markdown_parser import parse_markdown_blocks
     from src.docx_compiler.render import render_blocks_to_container
 
-from .common import parse_markdown_blocks, read_markdown_text
+from .common import read_markdown_text
 
 
 def apply_markdown_ir_to_table_cell(
