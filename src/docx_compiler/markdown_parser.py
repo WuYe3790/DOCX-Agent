@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass, field
 
 try:
     from markdown_it import MarkdownIt
@@ -6,13 +7,163 @@ except ModuleNotFoundError:
     MarkdownIt = None
 
 
-def parse_markdown_blocks(markdown_text: str) -> list[dict]:
+@dataclass
+class MarkdownBlock:
+    block_id: str = ""
+    text: str = ""
+    line_start: int = 1
+    line_end: int = 1
+    raw: str = ""
+    supported: bool = True
+    support: str | None = None
+
+    @property
+    def block_type(self) -> str:
+        raise NotImplementedError
+
+    def to_dict(self) -> dict:
+        data = {
+            "block_id": self.block_id,
+            "type": self.block_type,
+            "text": self.text,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "raw": self.raw,
+            "supported": self.supported,
+        }
+        if self.support:
+            data["support"] = self.support
+        return data
+
+
+@dataclass
+class HeadingBlock(MarkdownBlock):
+    level: int = 2
+
+    @property
+    def block_type(self) -> str:
+        return "heading1" if self.level == 1 else "heading2"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["heading_level"] = self.level
+        return data
+
+
+@dataclass
+class ParagraphBlock(MarkdownBlock):
+    inline_formulas: list[str] = field(default_factory=list)
+
+    @property
+    def block_type(self) -> str:
+        return "paragraph"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["inline_formulas"] = list(self.inline_formulas)
+        return data
+
+
+@dataclass
+class ListItemBlock(ParagraphBlock):
+    marker: str = "-"
+    ordered: bool = False
+    indent_level: int = 0
+
+    @property
+    def block_type(self) -> str:
+        return "list_item"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data.update(
+            {
+                "marker": self.marker,
+                "ordered": self.ordered,
+                "indent_level": self.indent_level,
+            }
+        )
+        return data
+
+
+@dataclass
+class TableCellBlock:
+    text: str = ""
+    header: bool = False
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "header": self.header}
+
+
+@dataclass
+class TableBlock(MarkdownBlock):
+    rows: list[list[TableCellBlock]] = field(default_factory=list)
+    header_row_count: int = 0
+
+    @property
+    def block_type(self) -> str:
+        return "table"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        rows = [[cell.to_dict() for cell in row] for row in self.rows]
+        data.update(
+            {
+                "rows": rows,
+                "header_row_count": self.header_row_count,
+                "column_count": max((len(row) for row in rows), default=0),
+            }
+        )
+        return data
+
+
+@dataclass
+class CodeBlock(MarkdownBlock):
+    language: str | None = None
+
+    @property
+    def block_type(self) -> str:
+        return "code_block"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["info"] = self.language
+        return data
+
+
+@dataclass
+class FormulaBlock(MarkdownBlock):
+    source_format: str = "latex"
+    display: bool = True
+
+    @property
+    def block_type(self) -> str:
+        return "formula_block"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data.update({"source_format": self.source_format, "display": self.display})
+        return data
+
+
+@dataclass
+class HtmlBlock(MarkdownBlock):
+    @property
+    def block_type(self) -> str:
+        return "html_block"
+
+
+def parse_markdown_blocks(markdown_text: str) -> list[MarkdownBlock]:
     if MarkdownIt is None:
         raise RuntimeError("markdown-it-py is required for Markdown AST parsing")
     return _parse_markdown_blocks_with_markdown_it(markdown_text)
 
 
-def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
+def blocks_to_dicts(blocks: list[MarkdownBlock | dict]) -> list[dict]:
+    return [block.to_dict() if isinstance(block, MarkdownBlock) else dict(block) for block in blocks]
+
+
+def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[MarkdownBlock]:
     normalized = markdown_text.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.split("\n")
     parser = MarkdownIt("commonmark").enable("table")
@@ -44,15 +195,8 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
         if token.type == "heading_open":
             inline = _next_inline(tokens, index)
             level = int(token.tag[1:]) if token.tag.startswith("h") and token.tag[1:].isdigit() else 2
-            block_type = "heading1" if level == 1 else "heading2"
             blocks.append(
-                _block_from_token(
-                    block_type,
-                    _inline_text(inline),
-                    token,
-                    lines,
-                    heading_level=level,
-                )
+                _block_from_token(HeadingBlock, _inline_text(inline), token, lines, level=level)
             )
             index = _skip_until(tokens, index, "heading_close") + 1
             continue
@@ -67,7 +211,7 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
             if list_stack:
                 blocks.append(
                     _block_from_token(
-                        "list_item",
+                        ListItemBlock,
                         _inline_text(inline),
                         token,
                         lines,
@@ -80,7 +224,7 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
             else:
                 blocks.append(
                     _block_from_token(
-                        "paragraph",
+                        ParagraphBlock,
                         _inline_text(inline),
                         token,
                         lines,
@@ -99,42 +243,42 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[dict]:
         if token.type == "fence":
             blocks.append(
                 _block_from_token(
-                    "code_block",
+                    CodeBlock,
                     token.content,
                     token,
                     lines,
                     supported=True,
                     support="degraded",
-                    info=(token.info or "").strip() or None,
+                    language=(token.info or "").strip() or None,
                 )
             )
             index += 1
             continue
 
         if token.type == "code_block":
-            blocks.append(_block_from_token("code_block", token.content, token, lines, supported=True, support="degraded"))
+            blocks.append(_block_from_token(CodeBlock, token.content, token, lines, supported=True, support="degraded"))
             index += 1
             continue
 
         if token.type == "html_block":
-            blocks.append(_block_from_token("html_block", token.content, token, lines, supported=False, support="rejected"))
+            blocks.append(_block_from_token(HtmlBlock, token.content, token, lines, supported=False, support="rejected"))
             index += 1
             continue
 
         index += 1
 
     for block_index, block in enumerate(blocks, start=1):
-        block["block_id"] = f"B{block_index:03d}"
+        block.block_id = f"B{block_index:03d}"
     return blocks
 
 
-def _block_from_token(block_type: str, text: str, token, lines: list[str], supported: bool = True, **extra) -> dict:
+def _block_from_token(block_cls, text: str, token, lines: list[str], supported: bool = True, **extra) -> MarkdownBlock:
     line_start, line_end = _line_range(token)
     raw = _raw_text(token, lines)
-    return _block(block_type, text, line_start, line_end, raw, supported=supported, **extra)
+    return block_cls(text=text, line_start=line_start, line_end=line_end, raw=raw, supported=supported, **extra)
 
 
-def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: list[str]) -> dict:
+def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: list[str]) -> TableBlock:
     token = tokens[start_index]
     rows = []
     current_row = None
@@ -154,7 +298,7 @@ def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: li
             current_row = None
             continue
         if item.type in {"th_open", "td_open"}:
-            current_cell = {"text": "", "header": item.type == "th_open"}
+            current_cell = TableCellBlock(header=item.type == "th_open")
             continue
         if item.type in {"th_close", "td_close"}:
             if current_row is not None and current_cell is not None:
@@ -162,24 +306,21 @@ def _table_block_from_tokens(tokens, start_index: int, end_index: int, lines: li
             current_cell = None
             continue
         if item.type == "inline" and current_cell is not None:
-            current_cell["text"] = _inline_text(item)
+            current_cell.text = _inline_text(item)
 
     line_start, line_end = _line_range(token)
     raw = _raw_text(token, lines)
-    return _block(
-        "table",
-        raw,
-        line_start,
-        line_end,
-        raw,
-        supported=True,
+    return TableBlock(
+        text=raw,
+        line_start=line_start,
+        line_end=line_end,
+        raw=raw,
         rows=rows,
         header_row_count=1 if header_row_count else 0,
-        column_count=max((len(row) for row in rows), default=0),
     )
 
 
-def _formula_block_from_token(token, inline, lines: list[str]) -> dict | None:
+def _formula_block_from_token(token, inline, lines: list[str]) -> FormulaBlock | None:
     raw = _raw_text(token, lines).strip()
     if not raw.startswith("$$") or not raw.endswith("$$") or len(raw) < 4:
         return None
@@ -187,12 +328,11 @@ def _formula_block_from_token(token, inline, lines: list[str]) -> dict | None:
     if not source:
         source = _inline_text(inline).strip("$").strip()
     line_start, line_end = _line_range(token)
-    return _block(
-        "formula_block",
-        source,
-        line_start,
-        line_end,
-        _raw_text(token, lines),
+    return FormulaBlock(
+        text=source,
+        line_start=line_start,
+        line_end=line_end,
+        raw=_raw_text(token, lines),
         supported=True,
         support="degraded",
         source_format="latex",
@@ -269,16 +409,3 @@ def _next_list_marker(context: dict) -> str:
         context["next_number"] = number + 1
         return f"{number}{context.get('delimiter') or '.'}"
     return context.get("marker") or "-"
-
-
-def _block(block_type: str, text: str, line_start: int, line_end: int, raw: str, supported: bool = True, **extra) -> dict:
-    data = {
-        "type": block_type,
-        "text": text,
-        "line_start": line_start,
-        "line_end": line_end,
-        "raw": raw,
-        "supported": supported,
-    }
-    data.update(extra)
-    return data

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .diagnostics import Diagnostic, SupportStatus, support_summary
 from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, TableRowIR
+from .markdown_parser import MarkdownBlock, blocks_to_dicts
 
 
 NATIVE_BLOCK_TYPES = {"heading1", "heading2", "paragraph", "table"}
@@ -24,9 +25,9 @@ class LoweringResult:
         return support_summary(self.source_blocks or self.render_items)
 
 
-def normalize_block_support(blocks: list[dict]) -> list[dict]:
+def normalize_block_support(blocks: list[MarkdownBlock | dict]) -> list[dict]:
     normalized = []
-    for block in blocks:
+    for block in blocks_to_dicts(blocks):
         item = dict(block)
         support = block_support(item)
         item["support"] = support
