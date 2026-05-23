@@ -8,7 +8,7 @@ from .common import json_result
 
 ACTION_GUIDE = """
 可用 actions 只有两个:
-- write_markdown_to_paragraph: 把 Markdown block 编译写入普通正文段落。target 必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入；mode 默认为 replace，也可设为 after。
+- write_markdown_to_paragraph: 把 Markdown block 编译写入普通正文段落流（支持编译段落、标题、列表、表格等所有 Markdown 元素并在段落位置动态创建对应的 Word 元素）。target 必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入；mode 默认为 replace，也可设为 after。
 - write_markdown_to_table_cell: 把 Markdown block 编译写入表格单元格。target 使用 table_index、row_index、cell_index。
 两个 action 都可用 include_block_ids 或 line_start/line_end 选择 Markdown 局部块。
 规则: 填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace。

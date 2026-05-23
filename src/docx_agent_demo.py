@@ -140,7 +140,7 @@ SYSTEM_PROMPT = f"""
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
 5. 长内容生成先写 Markdown 草稿到 out/drafts，再解析 Markdown IR，由模型决定 style_mapping 和目标位置，最后调用 markdown_to_word 编译写入。
-6. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph，必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
+6. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph（支持段落、标题、列表、表格等所有元素在段落流中的动态编译与自动创建），必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
 7. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
