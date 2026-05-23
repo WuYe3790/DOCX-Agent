@@ -8,7 +8,7 @@ from .common import json_result
 
 ACTION_GUIDE = """
 可用 actions 只有两个:
-- write_markdown_to_paragraph: 把 Markdown block 编译写入普通正文段落。target 可用 paragraph_index 或 anchor_text；mode 默认为 replace，也可设为 after。
+- write_markdown_to_paragraph: 把 Markdown block 编译写入普通正文段落。target 必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入；mode 默认为 replace，也可设为 after。
 - write_markdown_to_table_cell: 把 Markdown block 编译写入表格单元格。target 使用 table_index、row_index、cell_index。
 两个 action 都可用 include_block_ids 或 line_start/line_end 选择 Markdown 局部块。
 规则: 填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace。
@@ -196,7 +196,7 @@ def _run_markdown_paragraph_action(
     style_profile_path = payload.get("style_profile_path") or default_style_profile_path
     style_mapping = payload.get("style_mapping") or default_style_mapping
     mode = payload.get("mode", "replace")
-    has_anchor = payload.get("paragraph_index") is not None or payload.get("anchor_text")
+    has_anchor = payload.get("paragraph_index") is not None and payload.get("anchor_text") is not None
     missing = _missing_required(
         {
             **payload,
@@ -208,7 +208,11 @@ def _run_markdown_paragraph_action(
         ["markdown_path", "style_profile_path", "style_mapping", "target"],
     )
     if missing:
-        return json_result({"status": "error", "message": f"action {action_index} 缺少参数: {', '.join(missing)}", "action_guide": ACTION_GUIDE})
+        # 特殊处理，当 target 缺失时，说明缺少定位参数中的一个或两个，给出更清晰的说明
+        if "target" in missing:
+            missing.remove("target")
+            missing.extend(["paragraph_index", "anchor_text"])
+        return json_result({"status": "error", "message": f"action {action_index} 缺少必填定位参数: {', '.join(missing)}，write_markdown_to_paragraph 必须同时传入 paragraph_index 和 anchor_text 以防文本错位", "action_guide": ACTION_GUIDE})
     return apply_markdown_ir_to_paragraph(
         docx_path=docx_path,
         output_path=output_path,

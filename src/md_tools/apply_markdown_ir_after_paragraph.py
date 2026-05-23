@@ -167,21 +167,18 @@ def apply_markdown_ir_to_paragraph(
 
 
 def _resolve_anchor_paragraph(paragraph_list, paragraph_index: int | None, anchor_text: str | None, occurrence: int):
-    if paragraph_index is not None:
-        index = int(paragraph_index)
-        if index < 1 or index > len(paragraph_list):
-            raise ValueError(f"paragraph_index out of range: {index}, paragraph_count={len(paragraph_list)}")
-        return index, paragraph_list[index - 1]
+    if paragraph_index is None or not anchor_text:
+        raise ValueError("Both paragraph_index and anchor_text are strictly required to perform paragraph editing/insertion.")
 
-    if not anchor_text:
-        raise ValueError("paragraph_index or anchor_text is required")
+    index = int(paragraph_index)
+    if index < 1 or index > len(paragraph_list):
+        raise ValueError(f"paragraph_index out of range: {index}, paragraph_count={len(paragraph_list)}")
 
-    target_occurrence = int(occurrence or 1)
-    current_occurrence = 0
-    for index, paragraph in enumerate(paragraph_list, start=1):
-        if anchor_text in paragraph_text(paragraph):
-            current_occurrence += 1
-            if current_occurrence == target_occurrence:
-                return index, paragraph
-
-    raise ValueError(f"anchor_text not found: {anchor_text!r}, occurrence={target_occurrence}")
+    target_para = paragraph_list[index - 1]
+    para_text = paragraph_text(target_para)
+    if anchor_text not in para_text:
+        raise ValueError(
+            f"Anchor text verification failed. Paragraph at index {index} does not contain the expected anchor text '{anchor_text}'. "
+            f"Actual text: '{para_text}'. Please check the paragraph index and anchor text using read_docx_structure first."
+        )
+    return index, target_para
