@@ -3,20 +3,20 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from openai import OpenAI
 from openai import APIConnectionError, APIError, APITimeoutError
 
+from llm_adapter import LLMClientAdapter
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
-
 
 STYLE_REVIEW = "style_review"
 MD_DRAFT = "md_draft"
 WORD_EDITING = "word_editing"
-REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure"}
+REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure", "ls"}
 MD_DRAFT_TOOL_NAMES = {
     "write_markdown_draft",
     "read_markdown_draft",
     "parse_markdown_draft",
+    "ls",
 }
 WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
@@ -25,25 +25,9 @@ WORD_EDITING_TOOL_NAMES = {
     "parse_markdown_draft",
     "markdown_to_word",
     "diff_docx",
+    "ls",
 }
 
-
-def load_config():
-    config_path = Path(__file__).with_name("config.json")
-    if not config_path.exists():
-        return {}
-    with config_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def build_client():
-    config = load_config()
-    api_key = os.getenv("DEEPSEEK_API_KEY") or config.get("api_key", "")
-    base_url = config.get("base_url", "https://api.deepseek.com")
-    timeout = float(config.get("timeout_seconds", 300))
-    if not api_key:
-        raise RuntimeError("请设置 OPENAI_API_KEY/DEEPSEEK_API_KEY，或在 src/config.json 中配置 api_key")
-    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0,)
 
 
 def create_log_file() -> Path:
@@ -162,9 +146,9 @@ SYSTEM_PROMPT = f"""
 
 
 def main():
-    client = build_client()
-    model = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
-    thinking_type = os.getenv("DOCX_AGENT_THINKING", "enabled").strip().lower()
+    adapter = LLMClientAdapter()
+    model = adapter.get_model_name()
+    thinking_type = adapter.get_thinking_type()
     log_path = create_log_file()
 
     print("=" * 60)
@@ -206,17 +190,12 @@ def main():
         round_index += 1
         current_tool_schemas = tool_schemas_for_state(workflow_state)
         current_tool_names = tool_names(current_tool_schemas)
-        request_messages = messages + [{"role": "system", "content": state_prompt(workflow_state, current_tool_schemas)}]
+        # 合并系统提示词以满足 API 规范：要求只有一个系统提示词且必须置于最前（例如商汤模型）
+        combined_system = f"{SYSTEM_PROMPT}\n\n{state_prompt(workflow_state, current_tool_schemas)}"
+        request_messages = [{"role": "system", "content": combined_system}] + messages[1:]
         print(f"\n第 {round_index} 轮：正在请求模型 {model} ...", flush=True)
         print(f"当前状态: {workflow_state}，可用工具数: {len(current_tool_schemas)}", flush=True)
         try:
-            request_kwargs = {
-                "model": model,
-                "messages": request_messages,
-                "tools": current_tool_schemas,
-            }
-            if thinking_type and thinking_type != "disabled":
-                request_kwargs["extra_body"] = {"thinking": {"type": thinking_type}}
             append_log(
                 log_path,
                 f"第 {round_index} 轮模型请求",
@@ -228,7 +207,10 @@ def main():
                     "thinking_type": thinking_type,
                 },
             )
-            response = client.chat.completions.create(**request_kwargs)
+            response = adapter.create_chat_completion(
+                messages=request_messages,
+                tools=current_tool_schemas
+            )
         except APITimeoutError as exc:
             print("\n模型请求超时。可以先检查网络、base_url、模型名，或设置更长超时：")
             print("$env:OPENAI_TIMEOUT_SECONDS=\"120\"")
