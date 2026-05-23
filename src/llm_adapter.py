@@ -134,6 +134,14 @@ class LLMClientAdapter:
         """获取当前的 thinking 类型配置（仅用于 DeepSeek 兼容性）"""
         return self.thinking_type
 
+    def get_provider(self) -> str:
+        """获取当前所使用的提供商"""
+        return self.provider
+
+    def get_reasoning_effort(self) -> str:
+        """获取当前商汤模型的推理强度"""
+        return self.reasoning_effort
+
     def create_chat_completion(self, messages, tools=None, **kwargs):
         """
         创建对话补全：自动处理不同厂商特有的参数（例如 DeepSeek 的 thinking 块）
