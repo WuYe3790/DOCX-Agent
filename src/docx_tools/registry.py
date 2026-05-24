@@ -15,6 +15,10 @@ from .delete_text import delete_text, tools_schema as delete_text_schema
 from .delete_table_row import delete_table_row, tools_schema as delete_table_row_schema
 from .diff_docx import diff_docx, tools_schema as diff_docx_schema
 from .find_text import find_text, tools_schema as find_text_schema
+from .insert_image_after_paragraph import (
+    insert_image_after_paragraph,
+    tools_schema as insert_image_after_paragraph_schema,
+)
 from .insert_paragraph_after import insert_paragraph_after, tools_schema as insert_paragraph_after_schema
 from .insert_paragraph_after_like_sample import (
     insert_paragraph_after_like_sample,
@@ -68,6 +72,7 @@ TOOLS = {
     "replace_text": replace_text,
     "delete_text": delete_text,
     "insert_paragraph_after": insert_paragraph_after,
+    "insert_image_after_paragraph": insert_image_after_paragraph,
     "set_text_format": set_text_format,
     "diff_docx": diff_docx,
     "unzip_docx": unzip_docx,
@@ -100,6 +105,7 @@ TOOLS_SCHEMA = [
     replace_text_schema,
     delete_text_schema,
     insert_paragraph_after_schema,
+    insert_image_after_paragraph_schema,
     set_text_format_schema,
     diff_docx_schema,
     unzip_docx_schema,
