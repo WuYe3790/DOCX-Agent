@@ -115,8 +115,9 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 2. 请用 write_markdown_draft 按文档区域生成 Markdown 片段，保存到 out/drafts；不要写成包含全流程说明的单个自由草稿。
 3. 长正文块可以单独生成 Markdown 文件，例如 experiment_platform.md 等。
 4. 每个片段只写最终要进入 Word 的内容，不要包含编辑计划。
-5. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
-6. 列出草稿结构后，你必须立刻停止回答，等待用户审核草稿。用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
+5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。
+6. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
+7. 列出草稿结构后，你必须立刻停止回答，等待用户审核草稿。用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
 """.strip()
     else:
         state_rule = """
@@ -125,7 +126,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 规则：
 1. 你现在只能读取 Word 结构、解析 Markdown 片段、调用 markdown_to_word 编译写入，并用 diff_docx 验证。
 2. 写入前用 read_docx_structure 确认目标位置，用 parse_markdown_draft 确认 Markdown block_id/support/diagnostics。
-3. 普通正文写入只用 write_markdown_to_paragraph（支持段落、标题、列表、表格流式编译与自动生成）；表格单元格写入只用 write_markdown_to_table_cell。
+3. 普通正文写入只用 write_markdown_to_paragraph（支持段落、标题、列表、图片、表格流式编译与自动生成）；表格单元格写入只用 write_markdown_to_table_cell。
 4. 填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace；需要追加内容时使用 mode=after。
 5. 一个 Markdown 文件有多个区域时，用 include_block_ids 或 line_start/line_end 选择局部块。
 6. 不要引用 markdown_to_word 返回的 temporary_output_path；多步编辑应放在同一次 markdown_to_word.actions 中。
@@ -144,7 +145,7 @@ SYSTEM_PROMPT = f"""
 2. 插入文字时优先保留原 run 格式。
 3. 编辑后必须调用 diff_docx 验证变化。
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
-5. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph（支持段落、标题、列表、表格等所有元素在段落流中的动态编译与自动创建），必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
+5. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph（支持段落、标题、列表、图片、表格等所有元素在段落流中的动态编译与自动创建），必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
 6. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
 """.strip()
 
