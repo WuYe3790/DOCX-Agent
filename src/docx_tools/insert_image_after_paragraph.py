@@ -191,6 +191,7 @@ def insert_image_after_paragraph(
         <w:drawing>
           <wp:inline distT="0" distB="0" distL="0" distR="0">
             <wp:extent cx="{width_emu}" cy="{height_emu}"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
             <wp:docPr id="{unique_id}" name="图片 {unique_id}"/>
             <wp:cNvGraphicFramePr>
               <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
