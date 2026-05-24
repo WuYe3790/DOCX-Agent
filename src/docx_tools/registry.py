@@ -45,6 +45,7 @@ from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
 from basic_tools.analyze_image_content import analyze_image_content, tools_schema as analyze_image_content_schema
 from basic_tools.ls import ls, tools_schema as ls_schema
+from basic_tools.read import read, tools_schema as read_schema
 
 
 TOOLS = {
@@ -78,6 +79,7 @@ TOOLS = {
     "diff_docx": diff_docx,
     "unzip_docx": unzip_docx,
     "ls": ls,
+    "read": read,
     "analyze_image_content": analyze_image_content,
 }
 
@@ -112,6 +114,7 @@ TOOLS_SCHEMA = [
     diff_docx_schema,
     unzip_docx_schema,
     ls_schema,
+    read_schema,
     analyze_image_content_schema,
 ]
 
