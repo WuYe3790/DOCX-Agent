@@ -27,6 +27,121 @@ def load_document_xml(docx_path: str):
 def write_document_xml(input_docx: str, output_docx: str, document_root) -> None:
     output_path = Path(output_docx)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1. 扫描 document_root 中的所有 r:embed 属性，寻找以 TEMP_IMG_REL: 开头的值
+    # 临时占位符格式为: TEMP_IMG_REL:image_path
+    R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    embed_attrib_key = f"{{{R_NS}}}embed"
+    
+    nodes_with_embed = document_root.xpath("//*[@r:embed]", namespaces={"r": R_NS})
+    
+    image_replacements = {}  # TEMP_IMG_REL:path -> real_rId
+    images_to_add = {}       # local_path -> zip_target_name (e.g. media/image2.png)
+    
+    has_images = False
+    for node in nodes_with_embed:
+        val = node.get(embed_attrib_key, "")
+        if val.startswith("TEMP_IMG_REL:"):
+            has_images = True
+            break
+            
+    rels_bytes = None
+    content_types_bytes = None
+    
+    if has_images:
+        with zipfile.ZipFile(input_docx, "r") as z:
+            rels_bytes = z.read("word/_rels/document.xml.rels")
+            content_types_bytes = z.read("[Content_Types].xml")
+            
+        rels_root = etree.fromstring(rels_bytes)
+        content_types_root = etree.fromstring(content_types_bytes)
+        
+        # 解析最大 rId 和最大 media 图片名
+        max_rId_num = 0
+        max_img_num = 0
+        for rel in rels_root.xpath("//*[local-name()='Relationship']"):
+            r_id = rel.get("Id", "")
+            if r_id.startswith("rId"):
+                try:
+                    num = int(r_id[3:])
+                    if num > max_rId_num:
+                        max_rId_num = num
+                except ValueError:
+                    pass
+            target = rel.get("Target", "")
+            if target.startswith("media/image"):
+                name_part = target[11:]
+                parts = name_part.split(".")
+                if parts:
+                    try:
+                        num = int(parts[0])
+                        if num > max_img_num:
+                            max_img_num = num
+                    except ValueError:
+                        pass
+                        
+        RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+        TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+        
+        for node in nodes_with_embed:
+            val = node.get(embed_attrib_key, "")
+            if val.startswith("TEMP_IMG_REL:"):
+                img_path_str = val[13:]  # 提取路径
+                if val not in image_replacements:
+                    # 分配新的 rId 和图片名
+                    max_rId_num += 1
+                    max_img_num += 1
+                    new_rId = f"rId{max_rId_num}"
+                    
+                    img_file = Path(img_path_str)
+                    image_ext = img_file.suffix.lower().lstrip(".")
+                    if not image_ext:
+                        image_ext = "png"
+                    if image_ext == "jpg":
+                        image_ext = "jpeg"
+                        
+                    new_image_name = f"image{max_img_num}.{image_ext}"
+                    new_target = f"media/{new_image_name}"
+                    
+                    # 注册 Relationship
+                    new_rel = etree.Element(
+                        f"{{{RELS_NS}}}Relationship",
+                        Id=new_rId,
+                        Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+                        Target=new_target
+                    )
+                    rels_root.append(new_rel)
+                    
+                    # 注册 ContentType
+                    ext_declared = False
+                    for default in content_types_root.xpath("//*[local-name()='Default']"):
+                        if default.get("Extension", "").lower() == image_ext:
+                            ext_declared = True
+                            break
+                    if not ext_declared:
+                        mime_type = "image/png" if image_ext == "png" else "image/jpeg"
+                        new_default = etree.Element(
+                            f"{{{TYPES_NS}}}Default",
+                            Extension=image_ext,
+                            ContentType=mime_type
+                        )
+                        defaults = content_types_root.xpath("//*[local-name()='Default']")
+                        if defaults:
+                            defaults[-1].addnext(new_default)
+                        else:
+                            content_types_root.append(new_default)
+                            
+                    image_replacements[val] = new_rId
+                    images_to_add[img_path_str] = new_target
+                
+                # 替换属性值为真实的 rId
+                node.set(embed_attrib_key, image_replacements[val])
+                
+        # 序列化修改后的 manifests 字节
+        rels_bytes = etree.tostring(rels_root, encoding="UTF-8", xml_declaration=True, standalone=True)
+        content_types_bytes = etree.tostring(content_types_root, encoding="UTF-8", xml_declaration=True, standalone=True)
+
+    # 2. 序列化 document_root 字节
     document_bytes = etree.tostring(
         document_root,
         encoding="UTF-8",
@@ -34,13 +149,25 @@ def write_document_xml(input_docx: str, output_docx: str, document_root) -> None
         standalone=True,
     )
 
+    # 3. 写回 ZIP 文件并注入媒体文件
     with zipfile.ZipFile(input_docx, "r") as zin:
         with zipfile.ZipFile(output_docx, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 if item.filename == "word/document.xml":
                     zout.writestr(item, document_bytes)
+                elif item.filename == "word/_rels/document.xml.rels" and rels_bytes is not None:
+                    zout.writestr(item, rels_bytes)
+                elif item.filename == "[Content_Types].xml" and content_types_bytes is not None:
+                    zout.writestr(item, content_types_bytes)
                 else:
                     zout.writestr(item, zin.read(item.filename))
+            
+            # 写入所有新增的图片二进制文件
+            for local_path_str, zip_target in images_to_add.items():
+                local_path = Path(local_path_str)
+                if local_path.exists():
+                    with open(local_path, "rb") as f_img:
+                        zout.writestr(f"word/{zip_target}", f_img.read())
 
 
 def file_sha256(path: Path) -> str:

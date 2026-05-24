@@ -63,6 +63,22 @@ class ParagraphBlock(MarkdownBlock):
 
 
 @dataclass
+class ImageBlock(MarkdownBlock):
+    src: str = ""
+    alt: str = ""
+    alignment: str = "center"
+
+    @property
+    def block_type(self) -> str:
+        return "image"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data.update({"src": self.src, "alt": self.alt, "alignment": self.alignment})
+        return data
+
+
+@dataclass
 class ListItemBlock(ParagraphBlock):
     marker: str = "-"
     ordered: bool = False
@@ -201,6 +217,41 @@ def _parse_markdown_blocks_with_markdown_it(markdown_text: str) -> list[Markdown
 
         if token.type == "paragraph_open":
             inline = _next_inline(tokens, index)
+            
+            # 检查 inline token 的 children 是否含有 image 类型
+            is_image = False
+            image_src = ""
+            image_alt = ""
+            if inline is not None and inline.children:
+                for child in inline.children:
+                    if child.type == "image":
+                        import urllib.parse
+                        is_image = True
+                        image_src = urllib.parse.unquote(child.attrGet("src") or "")
+                        image_alt = child.content or child.attrGet("alt") or ""
+                        image_align = "center"
+                        if "|" in image_alt:
+                            parts = image_alt.rsplit("|", 1)
+                            if parts[1].strip().lower() in {"left", "center", "right"}:
+                                image_alt = parts[0].strip()
+                                image_align = parts[1].strip().lower()
+                        break
+            
+            if is_image:
+                blocks.append(
+                    _block_from_token(
+                        ImageBlock,
+                        "",
+                        token,
+                        lines,
+                        src=image_src,
+                        alt=image_alt,
+                        alignment=image_align,
+                    )
+                )
+                index = _skip_until(tokens, index, "paragraph_close") + 1
+                continue
+
             formula = _formula_block_from_token(token, inline, lines)
             if formula is not None and not list_stack:
                 blocks.append(formula)

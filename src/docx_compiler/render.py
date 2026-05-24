@@ -21,7 +21,7 @@ except ModuleNotFoundError:
         set_text_preserve_space,
     )
 
-from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR
+from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, ImageIR
 from .optimizer import optimize_paragraph
 
 DEFAULT_TABLE_WIDTH_TWIPS = 9000
@@ -30,7 +30,7 @@ MIN_COLUMN_WIDTH_TWIPS = 900
 
 def render_blocks_to_container(
     container,
-    blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR],
+    blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR | ImageIR],
     style_samples: dict[str, dict] | None = None,
     clear_existing: bool = False,
 ) -> list:
@@ -54,6 +54,8 @@ def render_blocks_to_container(
             element = render_code_block(block, style_samples=style_samples)
         elif isinstance(block, FormulaIR):
             element = render_formula(block, style_samples=style_samples)
+        elif isinstance(block, ImageIR):
+            element = render_image(block, style_samples=style_samples)
         else:
             raise TypeError(f"unsupported block IR: {type(block).__name__}")
         elements = element if isinstance(element, list) else [element]
@@ -355,3 +357,143 @@ def _default_widths(table_ir: TableIR, available_width_twips: int | None) -> lis
     min_width = MIN_COLUMN_WIDTH_TWIPS if total_width >= MIN_COLUMN_WIDTH_TWIPS * col_count else 240
     width = max(min_width, total_width // max(1, col_count))
     return [width] * col_count
+
+
+def render_image(image_ir: ImageIR, style_samples: dict[str, dict] | None = None):
+    """Programmatically construct DrawingML node tree to avoid hardcoded XML strings."""
+    from PIL import Image
+    from pathlib import Path
+    import random
+
+    img_path = Path(image_ir.src_path)
+    width_emu = 3810000
+    height_emu = 2857500
+
+    if img_path.exists():
+        try:
+            with Image.open(img_path) as img:
+                img_w, img_h = img.size
+                aspect_ratio = img_w / img_h
+                if image_ir.width_cm is not None:
+                    width_emu = int(image_ir.width_cm * 360000)
+                    if image_ir.height_cm is None:
+                        height_emu = int(width_emu / aspect_ratio)
+                if image_ir.height_cm is not None:
+                    height_emu = int(image_ir.height_cm * 360000)
+                    if image_ir.width_cm is None:
+                        width_emu = int(height_emu * aspect_ratio)
+                if image_ir.width_cm is None and image_ir.height_cm is None:
+                    width_emu = 3810000
+                    height_emu = int(width_emu / aspect_ratio)
+        except Exception:
+            pass
+
+    resolved_path = str(img_path.resolve())
+    temp_rId = f"TEMP_IMG_REL:{resolved_path}"
+    unique_id = str(random.randint(100000, 999999999))
+
+    # Declarations of Drawing namespaces
+    NS_MAP = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+        "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture"
+    }
+
+    # 1. Create w:p
+    paragraph = etree.Element(f"{{{NS_MAP['w']}}}p")
+    ppr = etree.SubElement(paragraph, f"{{{NS_MAP['w']}}}pPr")
+    jc = etree.SubElement(ppr, f"{{{NS_MAP['w']}}}jc")
+    align = image_ir.alignment or "center"
+    jc.set(f"{{{NS_MAP['w']}}}val", align)
+
+    # Apply style sample
+    style_sample = None
+    if style_samples and image_ir.style_sample_id:
+        style_sample = style_samples.get(image_ir.style_sample_id)
+    if style_sample:
+        apply_sample_format_to_paragraph(paragraph, style_sample)
+        # Ensure alignment is preserved/applied
+        jc_existing = ppr.find(f"{{{NS_MAP['w']}}}jc")
+        if jc_existing is None:
+            jc_existing = etree.SubElement(ppr, f"{{{NS_MAP['w']}}}jc")
+        jc_existing.set(f"{{{NS_MAP['w']}}}val", align)
+
+    # 2. Create w:r
+    run = etree.SubElement(paragraph, f"{{{NS_MAP['w']}}}r")
+    rpr = etree.SubElement(run, f"{{{NS_MAP['w']}}}rPr")
+    etree.SubElement(rpr, f"{{{NS_MAP['w']}}}noProof")
+
+    # 3. Build w:drawing
+    drawing = etree.SubElement(run, f"{{{NS_MAP['w']}}}drawing")
+    
+    # wp:inline
+    inline = etree.SubElement(drawing, f"{{{NS_MAP['wp']}}}inline")
+    inline.set("distT", "0")
+    inline.set("distB", "0")
+    inline.set("distL", "0")
+    inline.set("distR", "0")
+
+    # wp:extent
+    extent = etree.SubElement(inline, f"{{{NS_MAP['wp']}}}extent")
+    extent.set("cx", str(width_emu))
+    extent.set("cy", str(height_emu))
+
+    # wp:effectExtent
+    effect_extent = etree.SubElement(inline, f"{{{NS_MAP['wp']}}}effectExtent")
+    effect_extent.set("l", "0")
+    effect_extent.set("t", "0")
+    effect_extent.set("r", "0")
+    effect_extent.set("b", "0")
+
+    # wp:docPr
+    doc_pr = etree.SubElement(inline, f"{{{NS_MAP['wp']}}}docPr")
+    doc_pr.set("id", unique_id)
+    doc_pr.set("name", f"图片 {unique_id}")
+
+    # wp:cNvGraphicFramePr
+    c_nv_graphic_frame_pr = etree.SubElement(inline, f"{{{NS_MAP['wp']}}}cNvGraphicFramePr")
+    graphic_frame_locks = etree.SubElement(c_nv_graphic_frame_pr, f"{{{NS_MAP['a']}}}graphicFrameLocks")
+    graphic_frame_locks.set("noChangeAspect", "1")
+
+    # a:graphic
+    graphic = etree.SubElement(inline, f"{{{NS_MAP['a']}}}graphic")
+    graphic_data = etree.SubElement(graphic, f"{{{NS_MAP['a']}}}graphicData")
+    graphic_data.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")
+
+    # pic:pic
+    pic = etree.SubElement(graphic_data, f"{{{NS_MAP['pic']}}}pic")
+
+    # pic:nvPicPr
+    nv_pic_pr = etree.SubElement(pic, f"{{{NS_MAP['pic']}}}nvPicPr")
+    c_nv_pr = etree.SubElement(nv_pic_pr, f"{{{NS_MAP['pic']}}}cNvPr")
+    c_nv_pr.set("id", unique_id)
+    c_nv_pr.set("name", f"图片 {unique_id}")
+    etree.SubElement(nv_pic_pr, f"{{{NS_MAP['pic']}}}cNvPicPr")
+
+    # pic:blipFill
+    blip_fill = etree.SubElement(pic, f"{{{NS_MAP['pic']}}}blipFill")
+    blip = etree.SubElement(blip_fill, f"{{{NS_MAP['a']}}}blip")
+    blip.set(f"{{{NS_MAP['r']}}}embed", temp_rId)
+
+    stretch = etree.SubElement(blip_fill, f"{{{NS_MAP['a']}}}stretch")
+    etree.SubElement(stretch, f"{{{NS_MAP['a']}}}fillRect")
+
+    # pic:spPr
+    sp_pr = etree.SubElement(pic, f"{{{NS_MAP['pic']}}}spPr")
+    xfrm = etree.SubElement(sp_pr, f"{{{NS_MAP['a']}}}xfrm")
+    
+    off = etree.SubElement(xfrm, f"{{{NS_MAP['a']}}}off")
+    off.set("x", "0")
+    off.set("y", "0")
+    
+    ext = etree.SubElement(xfrm, f"{{{NS_MAP['a']}}}ext")
+    ext.set("cx", str(width_emu))
+    ext.set("cy", str(height_emu))
+
+    prst_geom = etree.SubElement(sp_pr, f"{{{NS_MAP['a']}}}prstGeom")
+    prst_geom.set("prst", "rect")
+    etree.SubElement(prst_geom, f"{{{NS_MAP['a']}}}avLst")
+
+    return paragraph

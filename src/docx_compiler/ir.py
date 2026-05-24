@@ -54,7 +54,7 @@ class ParagraphIR:
 
 @dataclass
 class CellIR:
-    blocks: list[ParagraphIR | "TableIR" | "CodeBlockIR" | "FormulaIR"] = field(default_factory=list)
+    blocks: list[ParagraphIR | "TableIR" | "CodeBlockIR" | "FormulaIR" | "ImageIR"] = field(default_factory=list)
     width_twips: int | None = None
 
 
@@ -90,3 +90,16 @@ class FormulaIR:
     line_start: int | None = None
     line_end: int | None = None
     render_mode: str = "plain_text_fallback"
+
+
+@dataclass
+class ImageIR:
+    src_path: str
+    alt_text: str = ""
+    width_cm: float | None = None
+    height_cm: float | None = None
+    style_sample_id: str | None = None
+    block_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    alignment: str = "center"

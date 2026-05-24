@@ -3,16 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .diagnostics import Diagnostic, SupportStatus, support_summary
-from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, TableRowIR
+from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, TableRowIR, ImageIR
 from .markdown_parser import (
     ListItemBlock,
     MarkdownBlock,
     TableBlock,
+    ImageBlock,
     blocks_to_dicts,
 )
 
 
-NATIVE_BLOCK_TYPES = {"heading1", "heading2", "paragraph", "table"}
+NATIVE_BLOCK_TYPES = {"heading1", "heading2", "paragraph", "table", "image"}
 DEGRADED_BLOCK_TYPES = {"list_item", "code_block", "formula_block"}
 REJECTED_BLOCK_TYPES = {"html_block"}
 
@@ -20,7 +21,7 @@ REJECTED_BLOCK_TYPES = {"html_block"}
 @dataclass
 class LoweringResult:
     source_blocks: list[MarkdownBlock] = field(default_factory=list)
-    layout_blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR] = field(default_factory=list)
+    layout_blocks: list[ParagraphIR | TableIR | CodeBlockIR | FormulaIR | ImageIR] = field(default_factory=list)
     render_items: list[dict] = field(default_factory=list)
     style_sample_ids: set[str] = field(default_factory=set)
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -161,6 +162,9 @@ def _render_item(block: MarkdownBlock, sample_id: str) -> dict:
         "language": getattr(block, "language", None),
         "source_format": getattr(block, "source_format", None),
         "display": getattr(block, "display", None),
+        "src": getattr(block, "src", None),
+        "alt": getattr(block, "alt", None),
+        "alignment": getattr(block, "alignment", "center"),
     }
 
 
@@ -172,10 +176,12 @@ def _sample_id_for_block(block: MarkdownBlock, style_mapping: dict) -> str | Non
         return style_mapping.get("code_block") or style_mapping.get("paragraph")
     if block_type == "formula_block":
         return style_mapping.get("formula") or style_mapping.get("paragraph")
+    if block_type == "image":
+        return style_mapping.get("image") or style_mapping.get("paragraph")
     return style_mapping.get(block_type)
 
 
-def _item_to_layout_ir(item: dict) -> ParagraphIR | TableIR | CodeBlockIR | FormulaIR:
+def _item_to_layout_ir(item: dict) -> ParagraphIR | TableIR | CodeBlockIR | FormulaIR | ImageIR:
     if item["type"] == "table":
         return _item_to_table_ir(item)
     if item["type"] == "code_block":
@@ -196,6 +202,16 @@ def _item_to_layout_ir(item: dict) -> ParagraphIR | TableIR | CodeBlockIR | Form
             block_id=item["block_id"],
             line_start=item["line_start"],
             line_end=item["line_end"],
+        )
+    if item["type"] == "image":
+        return ImageIR(
+            src_path=item["src"],
+            alt_text=item.get("alt", ""),
+            style_sample_id=item["sample_id"],
+            block_id=item["block_id"],
+            line_start=item["line_start"],
+            line_end=item["line_end"],
+            alignment=item.get("alignment", "center"),
         )
     return ParagraphIR(
         runs=_parse_inline_runs(item["text"]),
