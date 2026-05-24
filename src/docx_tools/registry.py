@@ -43,6 +43,7 @@ from .set_paragraph_indent import set_paragraph_indent, tools_schema as set_para
 from .set_text_format import set_text_format, tools_schema as set_text_format_schema
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
+from basic_tools.analyze_image_content import analyze_image_content, tools_schema as analyze_image_content_schema
 from basic_tools.ls import ls, tools_schema as ls_schema
 
 
@@ -77,6 +78,7 @@ TOOLS = {
     "diff_docx": diff_docx,
     "unzip_docx": unzip_docx,
     "ls": ls,
+    "analyze_image_content": analyze_image_content,
 }
 
 TOOLS_SCHEMA = [
@@ -110,6 +112,7 @@ TOOLS_SCHEMA = [
     diff_docx_schema,
     unzip_docx_schema,
     ls_schema,
+    analyze_image_content_schema,
 ]
 
 

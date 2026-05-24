@@ -11,12 +11,13 @@ from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 STYLE_REVIEW = "style_review"
 MD_DRAFT = "md_draft"
 WORD_EDITING = "word_editing"
-REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure", "ls"}
+REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "read_docx_structure", "ls", "analyze_image_content"}
 MD_DRAFT_TOOL_NAMES = {
     "write_markdown_draft",
     "read_markdown_draft",
     "parse_markdown_draft",
     "ls",
+    "analyze_image_content",
 }
 WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
@@ -26,6 +27,7 @@ WORD_EDITING_TOOL_NAMES = {
     "markdown_to_word",
     "diff_docx",
     "ls",
+    "analyze_image_content",
 }
 
 
@@ -103,8 +105,9 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 规则：
 1. 你现在只能做样式和结构分析，不能编辑文档。
 2. 请优先调用 analyze_docx_style_samples；必要时调用 read_docx_structure 辅助定位。必要时可用 ls 工具辅助查看路径。
-3. 拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id 与文档结构概述，并提示用户核对。
-4. 列出样式建议和结构概述后，你必须立刻停止回答并等待用户确认！绝对不要尝试去调用其他工具、也不要提及或开始下一阶段（如草稿生成）的工作。
+3. 如果需要理解文档中嵌入的图表、截图等图片内容，使用 analyze_image_content 进行视觉分析。
+4. 拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id 与文档结构概述，并提示用户核对。
+5. 列出样式建议和结构概述后，你必须立刻停止回答并等待用户确认！绝对不要尝试去调用其他工具、也不要提及或开始下一阶段（如草稿生成）的工作。
 """.strip()
     elif state == MD_DRAFT:
         state_rule = """
@@ -115,7 +118,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 2. 请用 write_markdown_draft 按文档区域生成 Markdown 片段，保存到 out/drafts；不要写成包含全流程说明的单个自由草稿。
 3. 长正文块可以单独生成 Markdown 文件，例如 experiment_platform.md 等。
 4. 每个片段只写最终要进入 Word 的内容，不要包含编辑计划。
-5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。
+5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。先用 analyze_image_content 理解图片内容再写描述，不要仅凭文件名猜测。
 6. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
 7. 列出草稿结构后，你必须立刻停止回答，等待用户审核草稿。用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
 """.strip()
@@ -147,6 +150,7 @@ SYSTEM_PROMPT = f"""
 4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
 5. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph（支持段落、标题、列表、图片、表格等所有元素在段落流中的动态编译与自动创建），必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
 6. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
+7. 当需要理解图表、截图、排版样式等图片视觉内容时，使用 analyze_image_content 进行多模态识图确认，不要仅凭文件名猜测图片内容。
 """.strip()
 
 
