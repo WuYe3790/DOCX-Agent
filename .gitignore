@@ -8,4 +8,5 @@ venv/
 
 # 本地工具测试输出
 out/
-文档格式测试/cases/tool_demo/
+文档格式测试/
+scratch/
