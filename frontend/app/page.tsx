@@ -174,9 +174,6 @@ export default function Home() {
         if (match && match[1]) {
           path = match[1];
           setDocxPath(path);
-        } else {
-          alert("请在需求中包含本地 Word 文件的绝对路径（例如：J:\\学习\\项目\\文档agent\\文档格式测试\\实验报告模板_v3_insert_text_001.docx）");
-          return;
         }
       }
       startAgentSession(prompt, path);

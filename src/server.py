@@ -330,10 +330,10 @@ async def ws_agent(websocket: WebSocket):
             return
             
         user_prompt = init_data.get("prompt")
-        docx_path = init_data.get("docx_path")
+        docx_path = init_data.get("docx_path") or ""
         
-        if not user_prompt or not docx_path:
-            await websocket.send_json({"type": "error", "message": "参数 prompt 和 docx_path 不能为空"})
+        if not user_prompt:
+            await websocket.send_json({"type": "error", "message": "参数 prompt 不能为空"})
             await websocket.close()
             return
             
