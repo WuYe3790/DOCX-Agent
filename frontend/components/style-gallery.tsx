@@ -11,7 +11,7 @@ interface CandidateHint {
 interface ExampleParagraph {
   text: string;
   paragraph_index: number;
-  location: string;
+  location: any;
 }
 
 interface StyleSample {
@@ -145,7 +145,13 @@ export default function StyleGallery({
                       “{sample.examples[0].text}”
                     </p>
                     <span className="absolute bottom-1 right-2 text-[8px] text-muted/40 font-mono">
-                      段落 {sample.examples[0].paragraph_index} | {sample.examples[0].location}
+                      段落 {sample.examples[0].paragraph_index} | {
+                        typeof sample.examples[0].location === "object"
+                          ? sample.examples[0].location.kind === "paragraph"
+                            ? `正文段落 #${sample.examples[0].location.body_index}`
+                            : `表格单元格(体:${sample.examples[0].location.body_index},表:${sample.examples[0].location.table_index_near_parent},行:${sample.examples[0].location.row_index},列:${sample.examples[0].location.cell_index})`
+                          : sample.examples[0].location
+                      }
                     </span>
                   </div>
                 </div>
