@@ -27,6 +27,7 @@ export default function Home() {
   const [feedbackValue, setFeedbackValue] = useState<string>("");
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -46,9 +47,22 @@ export default function Home() {
     setIsGenerating(false);
     setInputValue("");
     setFeedbackValue("");
+    setExpandedTools(new Set());
     if (wsRef.current) {
       wsRef.current.close();
     }
+  };
+
+  const toggleToolExpanded = (id: string) => {
+    setExpandedTools((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
   };
 
   const startAgentSession = (initialPrompt: string, path: string) => {
@@ -289,43 +303,56 @@ export default function Home() {
               </div>
             );
           } else if (msg.role === "tool") {
+            const isExpanded = expandedTools.has(msg.id || "");
             return (
               <div key={index} className="flex flex-col items-start w-full">
                 <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-slate-100/50 dark:bg-zinc-900/30 rounded-lg p-3 font-mono text-xs text-slate-600 dark:text-zinc-400">
-                  <div className="flex items-center justify-between mb-2">
+                  <div
+                    className="flex items-center justify-between cursor-pointer hover:bg-slate-200/50 dark:hover:bg-zinc-800/30 rounded -mx-2 px-2 py-1 -my-1"
+                    onClick={() => msg.id && toggleToolExpanded(msg.id)}
+                  >
                     <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-zinc-300">
                       <Wrench className="w-3.5 h-3.5" />
                       <span>调用工具: {msg.toolName}</span>
                     </div>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-sans font-semibold tracking-wide ${
-                        msg.toolStatus === "running"
-                          ? "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 animate-pulse"
-                          : msg.toolStatus === "success"
-                          ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400"
-                          : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"
-                      }`}
-                    >
-                      {msg.toolStatus === "running" ? "运行中" : msg.toolStatus === "success" ? "成功" : "失败"}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-sans font-semibold tracking-wide ${
+                          msg.toolStatus === "running"
+                            ? "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 animate-pulse"
+                            : msg.toolStatus === "success"
+                            ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400"
+                            : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"
+                        }`}
+                      >
+                        {msg.toolStatus === "running" ? "运行中" : msg.toolStatus === "success" ? "成功" : "失败"}
+                      </span>
+                      <span className="text-slate-400">
+                        {isExpanded ? "▲" : "▼"}
+                      </span>
+                    </div>
                   </div>
 
-                  {msg.toolArgs && (
-                    <div className="mb-2 text-[10px] text-slate-500">
-                      <span className="font-semibold">参数:</span>
-                      <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto whitespace-pre-wrap break-all">
-                        {msg.toolArgs}
-                      </pre>
-                    </div>
-                  )}
+                  {isExpanded && (
+                    <>
+                      {msg.toolArgs && (
+                        <div className="mb-2 mt-2 text-[10px] text-slate-500">
+                          <span className="font-semibold">参数:</span>
+                          <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto whitespace-pre-wrap break-all">
+                            {msg.toolArgs}
+                          </pre>
+                        </div>
+                      )}
 
-                  {msg.toolResult && (
-                    <div className="text-[10px] text-slate-500">
-                      <span className="font-semibold">执行结果:</span>
-                      <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
-                        {msg.toolResult}
-                      </pre>
-                    </div>
+                      {msg.toolResult && (
+                        <div className="mt-2 text-[10px] text-slate-500">
+                          <span className="font-semibold">执行结果:</span>
+                          <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+                            {msg.toolResult}
+                          </pre>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
