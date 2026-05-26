@@ -516,7 +516,27 @@ async def ws_agent(websocket: WebSocket):
                 
             # No tool calls: LLM finished responding in current round
             assistant_msg = {"role": "assistant", "content": accumulated_content}
+            if accumulated_reasoning:
+                assistant_msg["reasoning_content"] = accumulated_reasoning
             messages.append(assistant_msg)
+            
+            content_stripped = (accumulated_content or "").strip()
+            if len(content_stripped) < 200:
+                if workflow_state == STYLE_REVIEW:
+                    guidance = "你当前处于样式审核阶段，请基于已读取的文档信息直接输出样式分析结果（列出 sample_id 与对应格式特征），不要尝试查看其他目录或文件。"
+                elif workflow_state == MD_DRAFT:
+                    guidance = "请直接输出 Markdown 草稿内容或给出下一步草稿计划。"
+                else:
+                    guidance = "请基于当前可用工具直接执行操作或给出分析结果。"
+                
+                append_log(log_path, "空响应自动引导", {"workflow_state": workflow_state, "content_length": len(content_stripped)})
+                messages.append({"role": "user", "content": guidance})
+                
+                await websocket.send_json({
+                    "type": "content",
+                    "delta": f"\n\n*[系统引导] {guidance}*"
+                })
+                continue
             
             # State Machine Checkpoint Transitions
             if workflow_state == STYLE_REVIEW:
