@@ -152,11 +152,15 @@ export default function Home() {
 
     socket.onclose = () => {
       setIsConnected(false);
+      setIsWaitingApproval(false);
+      setApprovalPhase(null);
     };
 
     socket.onerror = (err) => {
       console.error("WebSocket error", err);
       setIsConnected(false);
+      setIsWaitingApproval(false);
+      setApprovalPhase(null);
     };
   };
 
