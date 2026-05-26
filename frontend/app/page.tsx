@@ -171,16 +171,7 @@ export default function Home() {
     setInputValue("");
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      let path = docxPath;
-      if (!path) {
-        // Try to extract docx path from prompt
-        const match = prompt.match(/(\S+\.(docx|docm))/i);
-        if (match && match[1]) {
-          path = match[1];
-          setDocxPath(path);
-        }
-      }
-      startAgentSession(prompt, path);
+      startAgentSession(prompt, "");
       return;
     }
 
@@ -259,10 +250,10 @@ export default function Home() {
             <div className="max-w-md">
               <h3 className="text-sm font-semibold text-slate-700 dark:text-zinc-300">新建排版任务会话</h3>
               <p className="text-xs text-slate-400 dark:text-zinc-500 mt-2 leading-relaxed font-mono text-left">
-                请输入您的排版需求，并在需求中指明本地 Word 文档的绝对路径。<br /><br />
+                请输入您的提问或排版需求，让 Agent 开始自主分析运行。<br /><br />
                 <strong>示例需求：</strong><br />
                 <span className="text-indigo-600 dark:text-indigo-400 text-[11px] block mt-1 bg-slate-100 dark:bg-zinc-800 p-2 rounded border border-slate-200 dark:border-zinc-700 select-text">
-                  把 J:\学习\项目\文档agent\文档格式测试\实验报告模板_v3_insert_text_001.docx 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。
+                  把 <code>文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx</code> 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。
                 </span>
               </p>
             </div>
@@ -429,7 +420,7 @@ export default function Home() {
                 ? "审批挂起中，请完成上方确认或提交反馈意见..."
                 : isConnected
                 ? "输入追加排版或段落修改需求..."
-                : "输入需求并包含本地 Word 绝对路径以启动 Agent..."
+                : "输入您的问题或排版需求以开始会话..."
             }
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
