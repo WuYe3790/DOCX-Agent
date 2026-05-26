@@ -4,6 +4,7 @@ import json
 import uuid
 import shutil
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -114,6 +115,25 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 """.strip()
 
     return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
+
+def create_log_file() -> Path:
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return log_dir / f"docx_agent_{timestamp}.log"
+
+def append_log(log_path: Path, title: str, data=None) -> None:
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"\n{'=' * 80}\n")
+        f.write(f"{datetime.now().isoformat(timespec='seconds')} | {title}\n")
+        f.write(f"{'=' * 80}\n")
+        if data is None:
+            return
+        if isinstance(data, str):
+            f.write(data)
+        else:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+        f.write("\n")
 
 # Initialize FastAPI
 app = FastAPI(title="DOCX-Agent Backend API", version="1.0.0")
@@ -266,6 +286,24 @@ async def ws_agent(websocket: WebSocket):
             await websocket.close()
             return
             
+        # Initialize file logging
+        log_path = create_log_file()
+        provider = adapter.get_provider()
+        start_config = {
+            "provider": provider,
+            "model": model,
+            "tool_count": len(TOOLS_SCHEMA),
+            "interface": "websocket_api",
+            "docx_path": docx_path
+        }
+        if provider == "deepseek":
+            start_config["thinking_type"] = adapter.get_thinking_type()
+        elif provider == "sensenova":
+            start_config["reasoning_effort"] = adapter.get_reasoning_effort()
+
+        append_log(log_path, "启动配置 (Web 终端)", start_config)
+        append_log(log_path, "用户输入", user_prompt)
+        
         messages.append({"role": "user", "content": user_prompt})
         
         round_index = 0
@@ -285,6 +323,16 @@ async def ws_agent(websocket: WebSocket):
                 "allowed_tools": list(current_tool_names)
             })
             
+            # Log model request
+            req_log = {
+                "provider": adapter.get_provider(),
+                "model": model,
+                "workflow_state": workflow_state,
+                "message_count": len(request_messages),
+                "tool_names": sorted(list(current_tool_names)),
+            }
+            append_log(log_path, f"第 {round_index} 轮模型请求", req_log)
+            
             # Call LLM client with streaming
             try:
                 response_stream = adapter.create_chat_completion(
@@ -293,6 +341,7 @@ async def ws_agent(websocket: WebSocket):
                     stream=True
                 )
             except Exception as e:
+                append_log(log_path, "模型调用失败", {"error": str(e)})
                 await websocket.send_json({"type": "error", "message": f"调用大模型失败: {str(e)}"})
                 break
                 
@@ -333,6 +382,22 @@ async def ws_agent(websocket: WebSocket):
                             if tc.function.arguments:
                                 tool_calls_map[idx]["arguments"] += tc.function.arguments
 
+            # Log model response
+            log_msg = {"role": "assistant"}
+            if tool_calls_map:
+                log_msg["tool_calls"] = [
+                    {
+                        "id": v["id"],
+                        "type": "function",
+                        "function": {"name": v["name"], "arguments": v["arguments"]}
+                    } for v in tool_calls_map.values()
+                ]
+            if accumulated_content:
+                log_msg["content"] = accumulated_content
+            if accumulated_reasoning:
+                log_msg["reasoning_content"] = accumulated_reasoning
+            append_log(log_path, f"第 {round_index} 轮模型响应", log_msg)
+
             # Process tool execution if requested
             if tool_calls_map:
                 tool_calls_list = []
@@ -358,6 +423,7 @@ async def ws_agent(websocket: WebSocket):
                     name = tc["function"]["name"]
                     args = tc["function"]["arguments"]
                     
+                    append_log(log_path, f"调用工具: {name}", {"tool": name, "arguments": args})
                     await websocket.send_json({
                         "type": "tool_start", 
                         "name": name, 
@@ -381,6 +447,7 @@ async def ws_agent(websocket: WebSocket):
                                 "message": f"工具执行异常: {str(e)}"
                             }, ensure_ascii=False)
                             
+                    append_log(log_path, f"工具结果: {name}", result)
                     await websocket.send_json({
                         "type": "tool_end",
                         "name": name,
@@ -402,6 +469,7 @@ async def ws_agent(websocket: WebSocket):
             
             # State Machine Checkpoint Transitions
             if workflow_state == STYLE_REVIEW:
+                append_log(log_path, "等待用户确认样式审核", {"state": workflow_state})
                 # Tell client we are waiting for style approval
                 await websocket.send_json({
                     "type": "wait_approval",
@@ -412,14 +480,17 @@ async def ws_agent(websocket: WebSocket):
                 # Await client response
                 client_res = await websocket.receive_json()
                 if client_res.get("type") != "approve":
+                    append_log(log_path, "非预期指令，关闭连接", client_res)
                     await websocket.send_json({"type": "error", "message": "指令类型应为 approve"})
                     break
                     
                 approved = client_res.get("approved", False)
                 feedback = client_res.get("feedback", "").strip()
+                append_log(log_path, "用户样式审核确认", {"approved": approved, "feedback": feedback})
                 
                 if approved:
                     workflow_state = MD_DRAFT
+                    append_log(log_path, "状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
                     continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
                     messages.append({"role": "user", "content": continue_msg})
                 else:
@@ -429,6 +500,7 @@ async def ws_agent(websocket: WebSocket):
                     })
                     
             elif workflow_state == MD_DRAFT:
+                append_log(log_path, "等待用户确认 Markdown 草稿", {"state": workflow_state})
                 # Tell client we are waiting for draft approval
                 await websocket.send_json({
                     "type": "wait_approval",
@@ -439,14 +511,17 @@ async def ws_agent(websocket: WebSocket):
                 # Await client response
                 client_res = await websocket.receive_json()
                 if client_res.get("type") != "approve":
+                    append_log(log_path, "非预期指令，关闭连接", client_res)
                     await websocket.send_json({"type": "error", "message": "指令类型应为 approve"})
                     break
                     
                 approved = client_res.get("approved", False)
                 feedback = client_res.get("feedback", "").strip()
+                append_log(log_path, "用户草稿确认", {"approved": approved, "feedback": feedback})
                 
                 if approved:
                     workflow_state = WORD_EDITING
+                    append_log(log_path, "状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
                     continue_msg = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，用 markdown_to_word 的 actions 编译写入 Word，最后调用 diff_docx 验证。"
                     messages.append({"role": "user", "content": continue_msg})
                 else:
@@ -456,6 +531,7 @@ async def ws_agent(websocket: WebSocket):
                     })
                     
             else: # WORD_EDITING
+                append_log(log_path, "写入与编译流完成", {"state": workflow_state})
                 # Compilation completed, return completion status
                 await websocket.send_json({
                     "type": "done",
@@ -466,8 +542,10 @@ async def ws_agent(websocket: WebSocket):
                 client_res = await websocket.receive_json()
                 if client_res.get("type") == "continue":
                     next_prompt = client_res.get("prompt", "")
+                    append_log(log_path, "用户输入追加需求", next_prompt)
                     messages.append({"role": "user", "content": next_prompt})
                 else:
+                    append_log(log_path, "收到关闭/非继续指令，结束会话", client_res)
                     break
                     
     except WebSocketDisconnect:
