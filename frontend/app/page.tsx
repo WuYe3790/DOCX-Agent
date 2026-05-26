@@ -168,8 +168,8 @@ export default function Home() {
           docx_path: path,
         })
       );
-      // Append initial prompt to chat message window
-      setMessages([{ role: "user", content: initialPrompt }]);
+      // Append initial prompt to chat message window keeping existing load notifications
+      setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
     };
 
     socket.onmessage = (event) => {
@@ -207,7 +207,9 @@ export default function Home() {
                 // Parse results dynamically to update UI features
                 try {
                   const resultObj = JSON.parse(data.result);
-                  if (data.name === "parse_markdown_draft" && resultObj.status === "ok") {
+                  if (data.name === "analyze_docx_style_samples" && resultObj.status === "ok") {
+                    if (resultObj.style_samples) setStyleSamples(resultObj.style_samples);
+                  } else if (data.name === "parse_markdown_draft" && resultObj.status === "ok") {
                     if (resultObj.blocks) setAstBlocks(resultObj.blocks);
                     if (resultObj.diagnostics) setDiagnostics(resultObj.diagnostics);
                   } else if (data.name === "write_markdown_draft" && resultObj.status === "ok") {
@@ -285,7 +287,23 @@ export default function Home() {
   };
 
   const handleSendPrompt = (prompt: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      let path = docxPath;
+      if (!path) {
+        // Try to extract docx path from prompt
+        const match = prompt.match(/(\S+\.(docx|docm))/i);
+        if (match && match[1]) {
+          path = match[1];
+          setDocxPath(path);
+          setActiveFile(path.split(/[/\\]/).pop() || "");
+        } else {
+          alert("请先拖入上传 Word 文件模板，或在需求中指明本地 .docx 文件路径");
+          return;
+        }
+      }
+      startAgentSession(prompt, path);
+      return;
+    }
 
     if (isWaitingApproval) return; // Wait for approval checkpoint buttons instead
 
@@ -355,23 +373,13 @@ export default function Home() {
       setActiveFile(file.name);
       setDocxPath(path);
 
-      // 2. Perform layout style extraction
-      const styleRes = await fetch("http://127.0.0.1:8000/api/style/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ docx_path: path }),
-      });
-
-      if (styleRes.ok) {
-        const styleData = await styleRes.json();
-        if (styleData.style_samples) {
-          setStyleSamples(styleData.style_samples);
+      // Add a system welcome message guiding the user to enter their specific requirement
+      setMessages([
+        {
+          role: "assistant",
+          content: `文档 **${file.name}** 已成功载入！\n\n请在下方输入框中，输入您的具体文档编辑需求（例如：“把该文档中的'依据实验指导书'后插入'测试文本'，另存为 out/demo.docx，并对比原文档。”）来启动 Agent 开始运行。`
         }
-      }
-
-      // 3. Launch Agent websocket interaction
-      const initialPrompt = `把 ${file.name} 进行样式审核与文档结构分析，提炼出排版属性标签`;
-      startAgentSession(initialPrompt, path);
+      ]);
     } catch (err: any) {
       alert(err.message || "上传文件过程中发生错误");
     } finally {

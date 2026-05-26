@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Check, Edit, FileText, Settings } from "lucide-react";
+import { Check, Edit, FileText, Settings, RefreshCw } from "lucide-react";
 
 interface CandidateHint {
   role: string;
@@ -70,7 +70,14 @@ export default function StyleGallery({
 
       {/* Main Grid View */}
       <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {styleSamples.map((sample) => {
+        {styleSamples.length === 0 ? (
+          <div className="col-span-full flex flex-col items-center justify-center p-8 text-center text-muted select-none h-full">
+            <RefreshCw className="w-8 h-8 text-muted/30 animate-spin mb-3 text-accent" />
+            <p className="text-xs">等待 Agent 启动分析并提取模板样式...</p>
+            <p className="text-[10px] text-muted/50 mt-1">AI 在执行首轮“样式审核”时会自动调用分析工具生成此处内容</p>
+          </div>
+        ) : (
+          styleSamples.map((sample) => {
           // Find currently bound markdown types
           const boundTypes = Object.entries(styleMapping)
             .filter(([_, value]) => value === sample.sample_id)
