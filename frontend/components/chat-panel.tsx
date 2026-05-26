@@ -191,22 +191,28 @@ export default function ChatPanel({
             <div className="flex flex-col gap-2 pt-1.5">
               <button
                 onClick={handleApproveAction}
-                className="w-full h-8 bg-accent hover:bg-accent-hover text-white text-xs font-medium rounded transition-colors duration-150 flex items-center justify-center cursor-pointer"
+                disabled={!isConnected}
+                className="w-full h-8 bg-accent hover:bg-accent-hover disabled:bg-muted-bg disabled:text-muted text-white text-xs font-medium rounded transition-colors duration-150 flex items-center justify-center cursor-pointer"
               >
-                同意并进入下一阶段
+                {isConnected ? "同意并进入下一阶段" : "已断开连接，请刷新并重试"}
               </button>
 
               <div className="flex items-center gap-1.5 border border-border bg-card rounded p-1">
                 <input
                   type="text"
-                  placeholder="在此输入您的修改建议..."
+                  placeholder={
+                    isConnected
+                      ? "在此输入您的修改建议..."
+                      : "连接已断开，无法提交反馈..."
+                  }
                   value={feedbackValue}
                   onChange={(e) => setFeedbackValue(e.target.value)}
-                  className="flex-1 bg-transparent px-2 py-1 text-xs border-0 outline-0 focus:ring-0 select-text"
+                  disabled={!isConnected}
+                  className="flex-1 bg-transparent px-2 py-1 text-xs border-0 outline-0 focus:ring-0 select-text disabled:text-muted"
                 />
                 <button
                   onClick={handleRejectAction}
-                  disabled={!feedbackValue.trim()}
+                  disabled={!feedbackValue.trim() || !isConnected}
                   className="h-6 px-2.5 bg-red-500 hover:bg-red-600 disabled:bg-muted-bg disabled:text-muted text-white text-[10px] font-medium rounded transition-colors duration-150 cursor-pointer"
                 >
                   反馈修改
