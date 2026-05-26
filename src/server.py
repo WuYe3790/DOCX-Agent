@@ -357,6 +357,17 @@ async def ws_agent(websocket: WebSocket):
         
         messages.append({"role": "user", "content": user_prompt})
         
+        async def send_heartbeat():
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    await websocket.send_json({"type": "heartbeat"})
+                    await asyncio.sleep(0)
+                except:
+                    break
+        
+        heartbeat_task = asyncio.create_task(send_heartbeat())
+
         round_index = 0
         while True:
             round_index += 1
@@ -475,8 +486,7 @@ async def ws_agent(websocket: WebSocket):
                         }, ensure_ascii=False)
                     else:
                         try:
-                            # Run tool execution
-                            result = call_tool(name, args)
+                            result = await asyncio.to_thread(call_tool, name, args)
                         except Exception as e:
                             result = json.dumps({
                                 "status": "error",
@@ -605,10 +615,19 @@ async def ws_agent(websocket: WebSocket):
                 else:
                     append_log(log_path, "收到关闭/非继续指令，结束会话", client_res)
                     break
-                    
     except WebSocketDisconnect:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         print("WebSocket 连接断开")
     except Exception as e:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         print(f"WebSocket 异常: {str(e)}")
         try:
             await websocket.send_json({"type": "error", "message": f"系统内部异常: {str(e)}"})

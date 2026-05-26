@@ -96,6 +96,9 @@ export default function Home() {
           setIsGenerating(true);
           break;
 
+        case "heartbeat":
+          break;
+
         case "reasoning":
           setReasoningStream((prev) => prev + data.delta);
           break;
