@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench, RefreshCw } from "lucide-react";
 import MarkdownRenderer from "../components/markdown-renderer";
 
 interface Message {
@@ -26,6 +26,7 @@ export default function Home() {
   const [inputValue, setInputValue] = useState<string>("");
   const [feedbackValue, setFeedbackValue] = useState<string>("");
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -42,6 +43,7 @@ export default function Home() {
     setDocxPath("");
     setIsWaitingApproval(false);
     setApprovalPhase(null);
+    setIsGenerating(false);
     setInputValue("");
     setFeedbackValue("");
     if (wsRef.current) {
@@ -59,6 +61,7 @@ export default function Home() {
 
     socket.onopen = () => {
       setIsConnected(true);
+      setIsGenerating(true);
       socket.send(
         JSON.stringify({
           type: "start",
@@ -76,6 +79,7 @@ export default function Home() {
         case "round_start":
           setReasoningStream("");
           setContentStream("");
+          setIsGenerating(true);
           break;
 
         case "reasoning":
@@ -87,6 +91,7 @@ export default function Home() {
           break;
 
         case "tool_start":
+          setIsGenerating(false);
           setMessages((prev) => [
             ...prev,
             {
@@ -127,6 +132,7 @@ export default function Home() {
           setContentStream("");
           setApprovalPhase(data.phase);
           setIsWaitingApproval(true);
+          setIsGenerating(false);
           break;
 
         case "done":
@@ -142,9 +148,11 @@ export default function Home() {
           setContentStream("");
           setIsWaitingApproval(false);
           setApprovalPhase(null);
+          setIsGenerating(false);
           break;
 
         case "error":
+          setIsGenerating(false);
           alert(`Agent 运行报错: ${data.message}`);
           break;
       }
@@ -154,6 +162,7 @@ export default function Home() {
       setIsConnected(false);
       setIsWaitingApproval(false);
       setApprovalPhase(null);
+      setIsGenerating(false);
     };
 
     socket.onerror = (err) => {
@@ -161,6 +170,7 @@ export default function Home() {
       setIsConnected(false);
       setIsWaitingApproval(false);
       setApprovalPhase(null);
+      setIsGenerating(false);
     };
   };
 
@@ -171,6 +181,7 @@ export default function Home() {
     setInputValue("");
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setIsGenerating(true);
       startAgentSession(prompt, "");
       return;
     }
@@ -178,6 +189,7 @@ export default function Home() {
     if (isWaitingApproval) return;
 
     setMessages((prev) => [...prev, { role: "user", content: prompt }]);
+    setIsGenerating(true);
     wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
   };
 
@@ -195,8 +207,15 @@ export default function Home() {
       })
     );
 
+    // Append user's action to messages list!
+    const userActionText = approved
+      ? "【确认同意】同意并进入下一阶段"
+      : `【拒绝反馈】反馈修改建议：${feedback}`;
+    setMessages((prev) => [...prev, { role: "user", content: userActionText }]);
+
     setIsWaitingApproval(false);
     setApprovalPhase(null);
+    setIsGenerating(true);
   };
 
   const handleApproveAction = () => {
@@ -332,6 +351,16 @@ export default function Home() {
             );
           }
         })}
+
+        {/* Active Thinking/Generating Indicator */}
+        {isGenerating && !reasoningStream && !contentStream && (
+          <div className="flex flex-col items-start w-full">
+            <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 flex items-center gap-3 shadow-sm">
+              <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />
+              <span className="text-xs font-mono text-slate-500">Agent 正在请求模型中，请稍候...</span>
+            </div>
+          </div>
+        )}
 
         {/* Real-time Streaming Response */}
         {(reasoningStream || contentStream) && (
