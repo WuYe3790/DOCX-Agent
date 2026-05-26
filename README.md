@@ -87,9 +87,30 @@ python src/docx_agent_demo.py
 把 文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx 中的"依据实验指导书"后插入"测试文本"，另存为 out/demo.docx，并对比原文档。
 ```
 
+### 网页版运行 (新)
+
+项目现已支持简约扁平化的 Web 智能工作站，将 Agent 的状态机流转与编译差异对比进行了全流程可视化：
+
+1. **启动后端 API 服务**：
+   ```powershell
+   # 安装新增依赖
+   pip install -r requirements.txt
+   # 启动 API 与 WebSocket 交互服务
+   python src/server.py
+   ```
+   服务将运行在 `http://127.0.0.1:8000`。网页端运行期间产生的所有对话、工具调用和逻辑状态改变，都会同步记录在本地的 `logs/docx_agent_<timestamp>.log` 文件中，便于离线调试。
+
+2. **启动前端工作站**：
+   ```powershell
+   cd frontend
+   # 启动开发服务器
+   npm run dev
+   ```
+   在浏览器中打开 `http://localhost:3000` 即可体验包含模板样式提取卡片绑定、Monaco 实时草稿编写、AST 大纲跳转、以及 side-by-side 文字差异高亮对比的完整交互工作流。
+
 ### 运行日志
 
-所有对话和工具调用记录在 `logs/docx_agent_<timestamp>.log`。
+所有对话和工具调用记录在 `logs/docx_agent_<timestamp>.log`（命令行与网页版均会在此输出本地文件日志）。
 
 ## 工具总览
 
