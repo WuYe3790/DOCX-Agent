@@ -192,7 +192,7 @@ export default function StyleGallery({
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
     </div>
   );

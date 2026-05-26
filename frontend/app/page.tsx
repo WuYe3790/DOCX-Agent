@@ -121,6 +121,9 @@ export default function Home() {
   const [changedFiles, setChangedFiles] = useState<ChangedFile[]>([]);
   const [paragraphChanges, setParagraphChanges] = useState<ParagraphChange[]>([]);
   const [finalDocxPath, setFinalDocxPath] = useState<string>("");
+  const [draftFiles, setDraftFiles] = useState<string[]>([]);
+  const [currentDraftFile, setCurrentDraftFile] = useState<string>("");
+  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now() / 1000);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -142,6 +145,9 @@ export default function Home() {
     setChangedFiles([]);
     setParagraphChanges([]);
     setFinalDocxPath("");
+    setDraftFiles([]);
+    setCurrentDraftFile("");
+    setSessionStartTime(Date.now() / 1000);
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     if (wsRef.current) {
@@ -180,6 +186,9 @@ export default function Home() {
           setWorkflowState(data.workflow_state);
           setReasoningStream("");
           setContentStream("");
+          if (data.workflow_state === "md_draft") {
+            fetchDraftList(true);
+          }
           break;
 
         case "reasoning":
@@ -216,7 +225,35 @@ export default function Home() {
                     // Extract draft text from tool arguments if present
                     try {
                       const argsObj = JSON.parse(log.arguments);
-                      if (argsObj.text) setMarkdownContent(argsObj.text);
+                      const content = argsObj.content || argsObj.text;
+                      if (content) {
+                        setMarkdownContent(content);
+                      }
+                      const outPath = argsObj.output_path || "";
+                      const filename = outPath.split(/[/\\]/).pop() || "";
+                      if (filename) {
+                        setCurrentDraftFile(filename);
+                      }
+                      fetchDraftList();
+                    } catch {}
+                  } else if (data.name === "read_markdown_draft" && resultObj.status === "ok") {
+                    try {
+                      if (resultObj.content) {
+                        let rawContent = resultObj.content;
+                        if (rawContent.match(/^\d{4}: /m)) {
+                          rawContent = rawContent
+                            .split("\n")
+                            .map((line: string) => line.substring(6))
+                            .join("\n");
+                        }
+                        setMarkdownContent(rawContent);
+                      }
+                      const path = resultObj.markdown_path || "";
+                      const filename = path.split(/[/\\]/).pop() || "";
+                      if (filename) {
+                        setCurrentDraftFile(filename);
+                      }
+                      fetchDraftList();
                     } catch {}
                   } else if (data.name === "diff_docx" && resultObj.status === "ok") {
                     if (resultObj.changed_files) setChangedFiles(resultObj.changed_files);
@@ -328,12 +365,89 @@ export default function Home() {
       if (approvalPhase === "style_review") {
         setStyleApproved(true);
         setWorkflowState("md_draft");
+        fetchDraftList(true);
       } else if (approvalPhase === "md_draft") {
         setDraftApproved(true);
         setWorkflowState("word_editing");
       }
     }
     setApprovalPhase(null);
+  };
+
+  const fetchDraftList = async (selectFirstIfEmpty = false) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/drafts/list?since=${sessionStartTime}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.files) {
+          setDraftFiles(data.files);
+          if (data.files.length > 0) {
+            if (selectFirstIfEmpty && !currentDraftFile) {
+              handleSelectDraftFile(data.files[0]);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch draft files list", e);
+    }
+  };
+
+  const handleSelectDraftFile = async (filename: string) => {
+    setCurrentDraftFile(filename);
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/drafts/read?filename=${encodeURIComponent(filename)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.content !== undefined) {
+          setMarkdownContent(data.content);
+          
+          // Trigger AST parsing manually to refresh AST trees for the selected file
+          try {
+            const parseRes = await fetch("http://127.0.0.1:8000/api/draft/parse", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ markdown_content: data.content }),
+            });
+            if (parseRes.ok) {
+              const parseData = await parseRes.json();
+              if (parseData.blocks) setAstBlocks(parseData.blocks);
+              if (parseData.diagnostics) setDiagnostics(parseData.diagnostics);
+            }
+          } catch (e) {
+            console.error("Failed to auto-parse selected draft", e);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to read draft file", e);
+    }
+  };
+
+  const handleSaveDraftFile = async () => {
+    if (!currentDraftFile) {
+      alert("无当前选中的草稿文件");
+      return;
+    }
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/drafts/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: currentDraftFile,
+          content: markdownContent,
+        }),
+      });
+      if (res.ok) {
+        alert(`草稿 ${currentDraftFile} 保存成功！`);
+        handleTriggerParse();
+      } else {
+        alert("保存草稿失败");
+      }
+    } catch (e) {
+      console.error("Failed to save draft", e);
+      alert("保存草稿异常");
+    }
   };
 
   // Style Mapping Gallery Callback
@@ -369,6 +483,9 @@ export default function Home() {
 
       const uploadData = await uploadRes.json();
       const path = uploadData.absolute_path;
+      if (uploadData.timestamp) {
+        setSessionStartTime(uploadData.timestamp);
+      }
 
       setActiveFile(file.name);
       setDocxPath(path);
@@ -493,6 +610,10 @@ export default function Home() {
                   astBlocks={astBlocks}
                   diagnostics={diagnostics}
                   onTriggerParse={handleTriggerParse}
+                  draftFiles={draftFiles}
+                  currentDraftFile={currentDraftFile}
+                  onSelectDraftFile={handleSelectDraftFile}
+                  onSaveDraftFile={handleSaveDraftFile}
                 />
               )}
 

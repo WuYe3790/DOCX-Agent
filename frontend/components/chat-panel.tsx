@@ -65,7 +65,7 @@ export default function ChatPanel({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputValue.trim() || !isConnected) return;
+    if (!inputValue.trim()) return;
     onSendPrompt(inputValue.trim());
     setInputValue("");
   };
@@ -275,20 +275,18 @@ export default function ChatPanel({
         <input
           type="text"
           placeholder={
-            isConnected
-              ? isWaitingApproval
-                ? "审批挂起中，请完成上方确认或反馈意见..."
-                : "请输入文档排版或段落修改需求..."
-              : "WebSocket 连接已断开，无法输入..."
+            isWaitingApproval
+              ? "审批挂起中，请完成上方确认或反馈意见..."
+              : "请输入文档排版或段落修改需求..."
           }
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          disabled={!isConnected || isWaitingApproval}
+          disabled={isWaitingApproval}
           className="flex-1 min-h-[36px] bg-card border border-border focus:border-accent rounded px-3 py-1.5 text-xs placeholder:text-muted/50 outline-0 disabled:bg-muted-bg/50 disabled:text-muted select-text"
         />
         <button
           type="submit"
-          disabled={!isConnected || !inputValue.trim() || isWaitingApproval}
+          disabled={!inputValue.trim() || isWaitingApproval}
           className="w-9 h-9 bg-accent hover:bg-accent-hover disabled:bg-muted-bg disabled:text-muted text-white rounded flex items-center justify-center transition-colors duration-150 cursor-pointer"
         >
           <Send className="w-4.5 h-4.5" />

@@ -159,6 +159,10 @@ class StyleAnalyzeRequest(BaseModel):
 class ParseDraftRequest(BaseModel):
     markdown_content: str
 
+class SaveDraftRequest(BaseModel):
+    filename: str
+    content: str
+
 class CompileRequest(BaseModel):
     docx_path: str
     output_path: str
@@ -192,7 +196,8 @@ async def upload_file(file: UploadFile = File(...)):
             "filename": file.filename,
             "saved_name": filename,
             "absolute_path": str(dest_path.resolve()),
-            "relative_path": f"out/uploads/{filename}"
+            "relative_path": f"out/uploads/{filename}",
+            "timestamp": datetime.now().timestamp()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
@@ -216,6 +221,52 @@ async def parse_draft(req: ParseDraftRequest):
         temp_draft_path.write_text(req.markdown_content, encoding="utf-8")
         result_json = parse_markdown_draft(str(temp_draft_path))
         return json.loads(result_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/drafts/list")
+async def list_drafts(since: Optional[float] = None):
+    """获取 out/drafts 目录下的所有草稿文件列表"""
+    try:
+        files = []
+        for file in DRAFT_DIR.glob("*.md"):
+            # Exclude temp_draft.md to keep workspace clean
+            if file.name != "temp_draft.md":
+                if since is not None:
+                    # Filter by modification time with a 5-second safety buffer
+                    if file.stat().st_mtime < (since - 5.0):
+                        continue
+                files.append(file.name)
+        return {"status": "ok", "files": sorted(files)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/drafts/read")
+async def read_draft(filename: str):
+    """读取指定草稿文件的内容"""
+    try:
+        # Prevent directory traversal attacks
+        safe_path = (DRAFT_DIR / filename).resolve()
+        if not safe_path.is_relative_to(DRAFT_DIR.resolve()):
+            raise HTTPException(status_code=400, detail="非法路径访问")
+        if not safe_path.exists():
+            raise HTTPException(status_code=404, detail="草稿文件不存在")
+        content = safe_path.read_text(encoding="utf-8")
+        return {"status": "ok", "filename": filename, "content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/drafts/save")
+async def save_draft(req: SaveDraftRequest):
+    """保存用户编辑的草稿内容到文件"""
+    try:
+        safe_path = (DRAFT_DIR / req.filename).resolve()
+        if not safe_path.is_relative_to(DRAFT_DIR.resolve()):
+            raise HTTPException(status_code=400, detail="非法路径访问")
+        safe_path.write_text(req.content, encoding="utf-8")
+        return {"status": "ok", "message": "保存成功"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

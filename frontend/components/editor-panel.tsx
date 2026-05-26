@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import type { Monaco } from "@monaco-editor/react";
-import { Play, FileCode, CheckCircle, AlertTriangle, XCircle, ArrowRight, Eye, Code } from "lucide-react";
+import { Play, FileCode, CheckCircle, AlertTriangle, XCircle, ArrowRight, Eye, Code, Save } from "lucide-react";
 import MarkdownRenderer from "./markdown-renderer";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), {
@@ -39,6 +39,10 @@ interface EditorPanelProps {
   astBlocks: ASTBlock[];
   diagnostics: Diagnostic[];
   onTriggerParse: () => void;
+  draftFiles: string[];
+  currentDraftFile: string;
+  onSelectDraftFile: (filename: string) => void;
+  onSaveDraftFile: () => void;
 }
 
 export default function EditorPanel({
@@ -47,6 +51,10 @@ export default function EditorPanel({
   astBlocks,
   diagnostics,
   onTriggerParse,
+  draftFiles,
+  currentDraftFile,
+  onSelectDraftFile,
+  onSaveDraftFile,
 }: EditorPanelProps) {
   const [viewMode, setViewMode] = useState<"split" | "edit" | "preview">("split");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -169,8 +177,37 @@ export default function EditorPanel({
           >
             <Play className="w-2.5 h-2.5 fill-current" /> 重新解析
           </button>
+          <button
+            onClick={onSaveDraftFile}
+            className="ml-1.5 px-2.5 py-0.5 text-[10px] font-semibold bg-accent border border-accent/80 text-white rounded cursor-pointer hover:bg-accent-hover flex items-center gap-1.5 transition-all"
+          >
+            <Save className="w-2.5 h-2.5" /> 保存草稿
+          </button>
         </div>
       </div>
+
+      {/* Draft Files Tab Strip */}
+      {draftFiles.length > 0 && (
+        <div className="h-8 border-b border-border bg-muted-bg/15 flex items-center px-4 overflow-x-auto gap-1 select-none shrink-0">
+          {draftFiles.map((filename) => {
+            const isActive = filename === currentDraftFile;
+            return (
+              <button
+                key={filename}
+                onClick={() => onSelectDraftFile(filename)}
+                className={`h-6 px-3 text-[10px] font-medium border rounded transition-all flex items-center gap-1.5 cursor-pointer ${
+                  isActive
+                    ? "bg-card border-border text-accent font-bold"
+                    : "border-transparent text-muted hover:bg-muted-bg/50"
+                }`}
+              >
+                <FileCode className="w-3 h-3 text-muted" />
+                <span>{filename}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden">
