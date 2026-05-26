@@ -384,54 +384,37 @@ async def ws_agent(websocket: WebSocket):
             }
             append_log(log_path, f"第 {round_index} 轮模型请求", req_log)
             
-            # Call LLM client with streaming
+            # Call LLM client
             try:
-                response_stream = adapter.create_chat_completion(
+                response = adapter.create_chat_completion(
                     messages=request_messages,
                     tools=current_tool_schemas,
-                    stream=True
+                    stream=False
                 )
             except Exception as e:
                 append_log(log_path, "模型调用失败", {"error": str(e)})
                 await websocket.send_json({"type": "error", "message": f"调用大模型失败: {str(e)}"})
                 break
-                
-            accumulated_reasoning = ""
-            accumulated_content = ""
-            tool_calls_map = {}
             
-            # Read streaming response chunks
-            for chunk in response_stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                
-                # Check for DeepSeek-style reasoning thinking block
-                reasoning_chunk = getattr(delta, "reasoning_content", None)
-                if reasoning_chunk:
-                    accumulated_reasoning += reasoning_chunk
-                    await websocket.send_json({"type": "reasoning", "delta": reasoning_chunk})
+            tool_calls_map = {}
+            accumulated_content = ""
+            accumulated_reasoning = ""
+            
+            if response.choices:
+                message = response.choices[0].message
+                if message:
+                    accumulated_reasoning = getattr(message, "reasoning_content", "") or ""
+                    accumulated_content = getattr(message, "content", "") or ""
                     
-                # Content delta
-                content_chunk = getattr(delta, "content", None)
-                if content_chunk:
-                    accumulated_content += content_chunk
-                    await websocket.send_json({"type": "content", "delta": content_chunk})
-                    
-                # Tool calls delta
-                tool_calls = getattr(delta, "tool_calls", None)
-                if tool_calls:
-                    for tc in tool_calls:
-                        idx = tc.index
-                        if idx not in tool_calls_map:
-                            tool_calls_map[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tc.id:
-                            tool_calls_map[idx]["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                tool_calls_map[idx]["name"] = tc.function.name
-                            if tc.function.arguments:
-                                tool_calls_map[idx]["arguments"] += tc.function.arguments
+                    tool_calls = getattr(message, "tool_calls", None)
+                    if tool_calls:
+                        for tc in tool_calls:
+                            idx = tc.index
+                            tool_calls_map[idx] = {
+                                "id": tc.id or "",
+                                "name": tc.function.name if tc.function else "",
+                                "arguments": tc.function.arguments if tc.function else ""
+                            }
 
             # Log model response
             log_msg = {"role": "assistant"}
@@ -469,18 +452,21 @@ async def ws_agent(websocket: WebSocket):
                     assistant_msg["content"] = accumulated_content
                 messages.append(assistant_msg)
                 
-                # Run each tool call and stream outputs back
+                # Run each tool call
                 for tc in tool_calls_list:
                     name = tc["function"]["name"]
                     args = tc["function"]["arguments"]
                     
                     append_log(log_path, f"调用工具: {name}", {"tool": name, "arguments": args})
+                    
+                    # 发送工具开始调用通知
                     await websocket.send_json({
-                        "type": "tool_start", 
-                        "name": name, 
+                        "type": "tool_start",
+                        "name": name,
                         "arguments": args
                     })
-                    
+                    await asyncio.sleep(0)
+
                     if name not in current_tool_names:
                         result = json.dumps({
                             "status": "error",
@@ -504,6 +490,7 @@ async def ws_agent(websocket: WebSocket):
                         "name": name,
                         "result": result
                     })
+                    await asyncio.sleep(0)
                     
                     messages.append({
                         "role": "tool",
