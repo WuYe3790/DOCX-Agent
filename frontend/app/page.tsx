@@ -1,161 +1,54 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, FileText, CheckCircle2, ArrowRight, Play, AlertCircle, RefreshCw } from "lucide-react";
-import WorkflowProgress from "../components/workflow-progress";
-import ChatPanel from "../components/chat-panel";
-import StyleGallery from "../components/style-gallery";
-import EditorPanel from "../components/editor-panel";
-import DiffViewer from "../components/diff-viewer";
+import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench } from "lucide-react";
+import MarkdownRenderer from "../components/markdown-renderer";
 
 interface Message {
-  role: "system" | "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool";
   content?: string;
   reasoning_content?: string;
-}
-
-interface ToolLog {
-  name: string;
-  arguments: string;
-  result?: string;
-  status: "running" | "success" | "error";
-  id: string;
-}
-
-interface CandidateHint {
-  role: string;
-  evidence_count: number;
-}
-
-interface ExampleParagraph {
-  text: string;
-  paragraph_index: number;
-  location: string;
-}
-
-interface StyleSample {
-  sample_id: string;
-  context: string;
-  format: {
-    bold: boolean;
-    italic: boolean;
-    color: string | null;
-    font_size_half_points: number | null;
-    font_ascii: string | null;
-    font_east_asia: string | null;
-  };
-  paragraph_format?: {
-    align: string | null;
-    indent_left_chars?: number;
-  };
-  total_occurrences: number;
-  candidate_role_hints: CandidateHint[];
-  examples: ExampleParagraph[];
-}
-
-interface ASTBlock {
-  block_id: string;
-  block_type: string;
-  text?: string;
-  line_start: number;
-  line_end: number;
-  support: "native" | "degraded" | "rejected";
-}
-
-interface Diagnostic {
-  severity: "info" | "warning" | "error";
-  message: string;
-  line_start?: number;
-  line_end?: number;
-  block_id?: string;
-}
-
-interface ChangedFile {
-  path: string;
-  status: "added" | "removed" | "changed";
-  before_size: number;
-  after_size: number;
-  delta?: number;
-}
-
-interface ParagraphChange {
-  paragraph_index: number;
-  before: string;
-  after: string;
-  contains_marker?: boolean;
+  toolName?: string;
+  toolArgs?: string;
+  toolResult?: string;
+  toolStatus?: "running" | "success" | "error";
+  id?: string;
 }
 
 export default function Home() {
-  // Global context states
-  const [activeFile, setActiveFile] = useState<string>("");
-  const [docxPath, setDocxPath] = useState<string>("");
-  const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [workflowState, setWorkflowState] = useState<"style_review" | "md_draft" | "word_editing">("style_review");
-  const [styleApproved, setStyleApproved] = useState<boolean>(false);
-  const [draftApproved, setDraftApproved] = useState<boolean>(false);
-
-  // Streaming WebSocket states
   const [messages, setMessages] = useState<Message[]>([]);
   const [reasoningStream, setReasoningStream] = useState<string>("");
   const [contentStream, setContentStream] = useState<string>("");
-  const [toolLogs, setToolLogs] = useState<ToolLog[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isWaitingApproval, setIsWaitingApproval] = useState<boolean>(false);
   const [approvalPhase, setApprovalPhase] = useState<"style_review" | "md_draft" | "word_editing" | null>(null);
-
-  // Extracted layout visual data states
-  const [styleSamples, setStyleSamples] = useState<StyleSample[]>([]);
-  const [styleMapping, setStyleMapping] = useState<Record<string, string>>({
-    paragraph: "S001",
-    heading1: "S002",
-    heading2: "S003",
-    heading3: "S004",
-    list_item: "S001",
-    table_cell: "S001",
-    code_block: "S001",
-    formula: "S001",
-  });
-  const [markdownContent, setMarkdownContent] = useState<string>("");
-  const [astBlocks, setAstBlocks] = useState<ASTBlock[]>([]);
-  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
-  const [changedFiles, setChangedFiles] = useState<ChangedFile[]>([]);
-  const [paragraphChanges, setParagraphChanges] = useState<ParagraphChange[]>([]);
-  const [finalDocxPath, setFinalDocxPath] = useState<string>("");
-  const [draftFiles, setDraftFiles] = useState<string[]>([]);
-  const [currentDraftFile, setCurrentDraftFile] = useState<string>("");
-  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now() / 1000);
+  const [docxPath, setDocxPath] = useState<string>("");
+  const [inputValue, setInputValue] = useState<string>("");
+  const [feedbackValue, setFeedbackValue] = useState<string>("");
+  const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Initialize or reset variables
+  // Auto-scroll chat window
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, contentStream, reasoningStream, isWaitingApproval]);
+
   const resetWorkspace = () => {
-    setActiveFile("");
-    setDocxPath("");
-    setWorkflowState("style_review");
-    setStyleApproved(false);
-    setDraftApproved(false);
     setMessages([]);
     setReasoningStream("");
     setContentStream("");
-    setToolLogs([]);
-    setStyleSamples([]);
-    setMarkdownContent("");
-    setAstBlocks([]);
-    setDiagnostics([]);
-    setChangedFiles([]);
-    setParagraphChanges([]);
-    setFinalDocxPath("");
-    setDraftFiles([]);
-    setCurrentDraftFile("");
-    setSessionStartTime(Date.now() / 1000);
+    setDocxPath("");
     setIsWaitingApproval(false);
     setApprovalPhase(null);
+    setInputValue("");
+    setFeedbackValue("");
     if (wsRef.current) {
       wsRef.current.close();
     }
   };
 
-  // Connect to Python Agent WebSocket
   const startAgentSession = (initialPrompt: string, path: string) => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -166,7 +59,6 @@ export default function Home() {
 
     socket.onopen = () => {
       setIsConnected(true);
-      // Send initial trigger payload
       socket.send(
         JSON.stringify({
           type: "start",
@@ -174,7 +66,6 @@ export default function Home() {
           docx_path: path,
         })
       );
-      // Append initial prompt to chat message window keeping existing load notifications
       setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
     };
 
@@ -183,12 +74,8 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start":
-          setWorkflowState(data.workflow_state);
           setReasoningStream("");
           setContentStream("");
-          if (data.workflow_state === "md_draft") {
-            fetchDraftList(true);
-          }
           break;
 
         case "reasoning":
@@ -200,84 +87,34 @@ export default function Home() {
           break;
 
         case "tool_start":
-          const newLog: ToolLog = {
-            id: Math.random().toString(36).substring(7),
-            name: data.name,
-            arguments: data.arguments,
-            status: "running",
-          };
-          setToolLogs((prev) => [...prev, newLog]);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "tool",
+              toolName: data.name,
+              toolArgs: data.arguments,
+              toolStatus: "running",
+              id: data.name + "_" + Date.now(),
+            },
+          ]);
           break;
 
         case "tool_end":
-          setToolLogs((prev) =>
-            prev.map((log) => {
-              if (log.name === data.name && log.status === "running") {
-                // Parse results dynamically to update UI features
-                try {
-                  const resultObj = JSON.parse(data.result);
-                  if (data.name === "analyze_docx_style_samples" && resultObj.status === "ok") {
-                    if (resultObj.style_samples) setStyleSamples(resultObj.style_samples);
-                  } else if (data.name === "parse_markdown_draft" && resultObj.status === "ok") {
-                    if (resultObj.blocks) setAstBlocks(resultObj.blocks);
-                    if (resultObj.diagnostics) setDiagnostics(resultObj.diagnostics);
-                  } else if (data.name === "write_markdown_draft" && resultObj.status === "ok") {
-                    // Extract draft text from tool arguments if present
-                    try {
-                      const argsObj = JSON.parse(log.arguments);
-                      const content = argsObj.content || argsObj.text;
-                      if (content) {
-                        setMarkdownContent(content);
-                      }
-                      const outPath = argsObj.output_path || "";
-                      const filename = outPath.split(/[/\\]/).pop() || "";
-                      if (filename) {
-                        setCurrentDraftFile(filename);
-                      }
-                      fetchDraftList();
-                    } catch {}
-                  } else if (data.name === "read_markdown_draft" && resultObj.status === "ok") {
-                    try {
-                      if (resultObj.content) {
-                        let rawContent = resultObj.content;
-                        if (rawContent.match(/^\d{4}: /m)) {
-                          rawContent = rawContent
-                            .split("\n")
-                            .map((line: string) => line.substring(6))
-                            .join("\n");
-                        }
-                        setMarkdownContent(rawContent);
-                      }
-                      const path = resultObj.markdown_path || "";
-                      const filename = path.split(/[/\\]/).pop() || "";
-                      if (filename) {
-                        setCurrentDraftFile(filename);
-                      }
-                      fetchDraftList();
-                    } catch {}
-                  } else if (data.name === "diff_docx" && resultObj.status === "ok") {
-                    if (resultObj.changed_files) setChangedFiles(resultObj.changed_files);
-                    if (resultObj.paragraph_changes) setParagraphChanges(resultObj.paragraph_changes);
-                  } else if (data.name === "markdown_to_word" && resultObj.status === "ok") {
-                    if (resultObj.output_path) setFinalDocxPath(resultObj.output_path);
-                  }
-                } catch (e) {
-                  console.error("Failed to parse tool result JSON payload", e);
-                }
-
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.role === "tool" && msg.toolName === data.name && msg.toolStatus === "running") {
                 return {
-                  ...log,
-                  status: data.result.includes('"status": "error"') ? "error" : "success",
-                  result: data.result,
+                  ...msg,
+                  toolStatus: data.result.includes('"status": "error"') ? "error" : "success",
+                  toolResult: data.result,
                 };
               }
-              return log;
+              return msg;
             })
           );
           break;
 
         case "wait_approval":
-          // Flush the streaming content to messages history
           setMessages((prev) => [
             ...prev,
             {
@@ -323,7 +160,12 @@ export default function Home() {
     };
   };
 
-  const handleSendPrompt = (prompt: string) => {
+  const handleSendPrompt = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputValue.trim()) return;
+    const prompt = inputValue.trim();
+    setInputValue("");
+
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       let path = docxPath;
       if (!path) {
@@ -332,9 +174,8 @@ export default function Home() {
         if (match && match[1]) {
           path = match[1];
           setDocxPath(path);
-          setActiveFile(path.split(/[/\\]/).pop() || "");
         } else {
-          alert("请先拖入上传 Word 文件模板，或在需求中指明本地 .docx 文件路径");
+          alert("请在需求中包含本地 Word 文件的绝对路径（例如：J:\\学习\\项目\\文档agent\\文档格式测试\\实验报告模板_v3_insert_text_001.docx）");
           return;
         }
       }
@@ -342,14 +183,17 @@ export default function Home() {
       return;
     }
 
-    if (isWaitingApproval) return; // Wait for approval checkpoint buttons instead
+    if (isWaitingApproval) return;
 
     setMessages((prev) => [...prev, { role: "user", content: prompt }]);
     wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
   };
 
   const handleApprove = (approved: boolean, feedback?: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      alert("与 Agent 的连接已断开，请重新输入需求开始新会话。");
+      return;
+    }
 
     wsRef.current.send(
       JSON.stringify({
@@ -360,275 +204,246 @@ export default function Home() {
     );
 
     setIsWaitingApproval(false);
-
-    if (approved) {
-      if (approvalPhase === "style_review") {
-        setStyleApproved(true);
-        setWorkflowState("md_draft");
-        fetchDraftList(true);
-      } else if (approvalPhase === "md_draft") {
-        setDraftApproved(true);
-        setWorkflowState("word_editing");
-      }
-    }
     setApprovalPhase(null);
   };
 
-  const fetchDraftList = async (selectFirstIfEmpty = false) => {
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/api/drafts/list?since=${sessionStartTime}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.files) {
-          setDraftFiles(data.files);
-          if (data.files.length > 0) {
-            if (selectFirstIfEmpty && !currentDraftFile) {
-              handleSelectDraftFile(data.files[0]);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Failed to fetch draft files list", e);
-    }
+  const handleApproveAction = () => {
+    handleApprove(true);
   };
 
-  const handleSelectDraftFile = async (filename: string) => {
-    setCurrentDraftFile(filename);
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/api/drafts/read?filename=${encodeURIComponent(filename)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.content !== undefined) {
-          setMarkdownContent(data.content);
-          
-          // Trigger AST parsing manually to refresh AST trees for the selected file
-          try {
-            const parseRes = await fetch("http://127.0.0.1:8000/api/draft/parse", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ markdown_content: data.content }),
-            });
-            if (parseRes.ok) {
-              const parseData = await parseRes.json();
-              if (parseData.blocks) setAstBlocks(parseData.blocks);
-              if (parseData.diagnostics) setDiagnostics(parseData.diagnostics);
-            }
-          } catch (e) {
-            console.error("Failed to auto-parse selected draft", e);
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Failed to read draft file", e);
-    }
-  };
-
-  const handleSaveDraftFile = async () => {
-    if (!currentDraftFile) {
-      alert("无当前选中的草稿文件");
-      return;
-    }
-    try {
-      const res = await fetch("http://127.0.0.1:8000/api/drafts/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: currentDraftFile,
-          content: markdownContent,
-        }),
-      });
-      if (res.ok) {
-        alert(`草稿 ${currentDraftFile} 保存成功！`);
-        handleTriggerParse();
-      } else {
-        alert("保存草稿失败");
-      }
-    } catch (e) {
-      console.error("Failed to save draft", e);
-      alert("保存草稿异常");
-    }
-  };
-
-  // Style Mapping Gallery Callback
-  const handleMappingChange = (markdownType: string, sampleId: string) => {
-    setStyleMapping((prev) => ({
-      ...prev,
-      [markdownType]: sampleId,
-    }));
-  };
-
-  // Upload DOCX Template API
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const file = files[0];
-    setIsUploading(true);
-    resetWorkspace();
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      // 1. Upload file to REST server
-      const uploadRes = await fetch("http://127.0.0.1:8000/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!uploadRes.ok) {
-        throw new Error("上传失败，请确保 FastAPI 后端服务已启动并在 8000 端口运行。");
-      }
-
-      const uploadData = await uploadRes.json();
-      const path = uploadData.absolute_path;
-      if (uploadData.timestamp) {
-        setSessionStartTime(uploadData.timestamp);
-      }
-
-      setActiveFile(file.name);
-      setDocxPath(path);
-
-      // Add a system welcome message guiding the user to enter their specific requirement
-      setMessages([
-        {
-          role: "assistant",
-          content: `文档 **${file.name}** 已成功载入！\n\n请在下方输入框中，输入您的具体文档编辑需求（例如：“把该文档中的'依据实验指导书'后插入'测试文本'，另存为 out/demo.docx，并对比原文档。”）来启动 Agent 开始运行。`
-        }
-      ]);
-    } catch (err: any) {
-      alert(err.message || "上传文件过程中发生错误");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  // Local Monaco content modifications trigger manual parsing
-  const handleContentChange = (content: string) => {
-    setMarkdownContent(content);
-  };
-
-  const handleTriggerParse = async () => {
-    try {
-      const res = await fetch("http://127.0.0.1:8000/api/draft/parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown_content: markdownContent }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.blocks) setAstBlocks(data.blocks);
-        if (data.diagnostics) setDiagnostics(data.diagnostics);
-      }
-    } catch (e) {
-      console.error("Failed to parse draft manually", e);
-    }
-  };
-
-  // Download Output docx
-  const handleDownload = () => {
-    if (!finalDocxPath) return;
-    window.open(`http://127.0.0.1:8000/api/download?path=${encodeURIComponent(finalDocxPath)}`, "_blank");
+  const handleRejectAction = () => {
+    if (!feedbackValue.trim()) return;
+    handleApprove(false, feedbackValue.trim());
+    setFeedbackValue("");
   };
 
   return (
-    <div className="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
-      {/* Workflow Progress Bar */}
-      <WorkflowProgress
-        currentState={workflowState}
-        styleApproved={styleApproved}
-        draftApproved={draftApproved}
-      />
-
-      {/* Main Area divided into: Left (Console) and Right (Workspace) */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Side Column: Interactive Chat and Logging console (1/3 weight) */}
-        <div className="w-96 lg:w-[440px] h-full shrink-0">
-          <ChatPanel
-            messages={messages}
-            reasoningStream={reasoningStream}
-            contentStream={contentStream}
-            toolLogs={toolLogs}
-            isWaitingApproval={isWaitingApproval}
-            approvalPhase={approvalPhase}
-            onSendPrompt={handleSendPrompt}
-            onApprove={handleApprove}
-            isConnected={isConnected}
-          />
-        </div>
-
-        {/* Right Side Column: Multi-tab workspace depending on state (2/3 weight) */}
-        <div className="flex-1 h-full overflow-hidden bg-muted-bg/15">
-          {!docxPath ? (
-            /* Upload File Initial State Layout */
-            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center select-none">
-              <div className="border-2 border-dashed border-border hover:border-accent bg-card rounded-md max-w-md w-full p-8 transition-colors flex flex-col items-center justify-center space-y-4">
-                <div className="w-12 h-12 rounded-full bg-muted-bg flex items-center justify-center text-muted">
-                  {isUploading ? (
-                    <RefreshCw className="w-6 h-6 animate-spin text-accent" />
-                  ) : (
-                    <Upload className="w-6 h-6" />
-                  )}
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground">
-                    {isUploading ? "正在分析排版模板中..." : "载入 Word 文档模板开始排版"}
-                  </h3>
-                  <p className="text-xs text-muted mt-1 leading-relaxed">
-                    拖拽或点击上传带有排版样式的 `.docx` 模板文档，Agent 会自动启动三阶段状态机编译工作流。
-                  </p>
-                </div>
-                {!isUploading && (
-                  <label className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs font-semibold rounded cursor-pointer transition-colors shadow-sm inline-block">
-                    选择文件
-                    <input
-                      type="file"
-                      accept=".docx,.docm"
-                      className="hidden"
-                      onChange={handleFileUpload}
-                    />
-                  </label>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Dynamic workspace panels active per phase */
-            <div className="w-full h-full">
-              {workflowState === "style_review" && (
-                <StyleGallery
-                  styleSamples={styleSamples}
-                  styleMapping={styleMapping}
-                  onMappingChange={handleMappingChange}
-                />
-              )}
-
-              {workflowState === "md_draft" && (
-                <EditorPanel
-                  markdownContent={markdownContent}
-                  onContentChange={handleContentChange}
-                  astBlocks={astBlocks}
-                  diagnostics={diagnostics}
-                  onTriggerParse={handleTriggerParse}
-                  draftFiles={draftFiles}
-                  currentDraftFile={currentDraftFile}
-                  onSelectDraftFile={handleSelectDraftFile}
-                  onSaveDraftFile={handleSaveDraftFile}
-                />
-              )}
-
-              {workflowState === "word_editing" && (
-                <DiffViewer
-                  changedFiles={changedFiles}
-                  paragraphChanges={paragraphChanges}
-                  finalDocxPath={finalDocxPath}
-                  onDownload={handleDownload}
-                />
-              )}
-            </div>
+    <div className="w-full h-screen flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-50 font-sans">
+      {/* Header Bar */}
+      <header className="h-14 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="font-mono font-bold text-sm tracking-wider uppercase text-slate-800 dark:text-zinc-100">
+            DOCX-Agent 交互工作台
+          </span>
+          {docxPath && (
+            <span className="text-[10px] font-mono px-2 py-0.5 border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-500 rounded truncate max-w-xs md:max-w-md">
+              {docxPath}
+            </span>
           )}
         </div>
+
+        <div className="flex items-center gap-4">
+          {/* Connection Badge */}
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+            <span className="text-xs font-mono text-slate-500">{isConnected ? "已连接" : "已断开"}</span>
+          </div>
+
+          <button
+            onClick={resetWorkspace}
+            className="px-3 py-1 text-xs font-semibold border border-slate-200 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded transition-colors cursor-pointer text-slate-600 dark:text-zinc-300"
+          >
+            重置会话
+          </button>
+        </div>
+      </header>
+
+      {/* Main Chat Flow Container */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 max-w-4xl w-full mx-auto space-y-6">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-zinc-500 select-none space-y-4">
+            <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-400 dark:text-zinc-500">
+              <Terminal className="w-6 h-6" />
+            </div>
+            <div className="max-w-md">
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-zinc-300">新建排版任务会话</h3>
+              <p className="text-xs text-slate-400 dark:text-zinc-500 mt-2 leading-relaxed font-mono text-left">
+                请输入您的排版需求，并在需求中指明本地 Word 文档的绝对路径。<br /><br />
+                <strong>示例需求：</strong><br />
+                <span className="text-indigo-600 dark:text-indigo-400 text-[11px] block mt-1 bg-slate-100 dark:bg-zinc-800 p-2 rounded border border-slate-200 dark:border-zinc-700 select-text">
+                  把 J:\学习\项目\文档agent\文档格式测试\实验报告模板_v3_insert_text_001.docx 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。
+                </span>
+              </p>
+            </div>
+          </div>
+        )}
+
+        {messages.map((msg, index) => {
+          if (msg.role === "user") {
+            return (
+              <div key={index} className="flex flex-col items-end">
+                <div className="max-w-[85%] rounded-lg px-4 py-3 bg-indigo-600 text-white border border-indigo-700 select-text text-sm">
+                  <p className="whitespace-pre-wrap select-text">{msg.content}</p>
+                </div>
+              </div>
+            );
+          } else if (msg.role === "tool") {
+            return (
+              <div key={index} className="flex flex-col items-start w-full">
+                <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-slate-100/50 dark:bg-zinc-900/30 rounded-lg p-3 font-mono text-xs text-slate-600 dark:text-zinc-400">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-zinc-300">
+                      <Wrench className="w-3.5 h-3.5" />
+                      <span>调用工具: {msg.toolName}</span>
+                    </div>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-sans font-semibold tracking-wide ${
+                        msg.toolStatus === "running"
+                          ? "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 animate-pulse"
+                          : msg.toolStatus === "success"
+                          ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400"
+                          : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      {msg.toolStatus === "running" ? "运行中" : msg.toolStatus === "success" ? "成功" : "失败"}
+                    </span>
+                  </div>
+
+                  {msg.toolArgs && (
+                    <div className="mb-2 text-[10px] text-slate-500">
+                      <span className="font-semibold">参数:</span>
+                      <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto whitespace-pre-wrap break-all">
+                        {msg.toolArgs}
+                      </pre>
+                    </div>
+                  )}
+
+                  {msg.toolResult && (
+                    <div className="text-[10px] text-slate-500">
+                      <span className="font-semibold">执行结果:</span>
+                      <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+                        {msg.toolResult}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          } else {
+            // Assistant Message
+            return (
+              <div key={index} className="flex flex-col items-start w-full select-text">
+                <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 space-y-3 shadow-sm">
+                  {msg.reasoning_content && (
+                    <div className="p-3 bg-slate-50 dark:bg-zinc-850 border-l-2 border-slate-300 dark:border-zinc-700 text-xs text-slate-500 dark:text-zinc-400 font-mono rounded">
+                      <p className="font-semibold mb-1 text-[10px] tracking-wider text-slate-400 dark:text-zinc-500 uppercase">思考路径 (DeepSeek Reasoning)</p>
+                      <p className="whitespace-pre-wrap select-text">{msg.reasoning_content}</p>
+                    </div>
+                  )}
+                  {msg.content && (
+                    <div className="text-sm select-text">
+                      <MarkdownRenderer content={msg.content} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+        })}
+
+        {/* Real-time Streaming Response */}
+        {(reasoningStream || contentStream) && (
+          <div className="flex flex-col items-start w-full">
+            <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 space-y-3 shadow-sm">
+              {reasoningStream && (
+                <div className="border-l-2 border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-850 rounded overflow-hidden">
+                  <button
+                    onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
+                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold text-slate-400 dark:text-zinc-500 font-mono uppercase bg-slate-100/50 dark:bg-zinc-850/50 hover:bg-slate-100 dark:hover:bg-zinc-800"
+                  >
+                    <span>思考中...</span>
+                    {isThinkingExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                  {isThinkingExpanded && (
+                    <div className="p-3 text-xs text-slate-500 dark:text-zinc-400 font-mono whitespace-pre-wrap max-h-[160px] overflow-y-auto border-t border-slate-200 dark:border-zinc-750">
+                      {reasoningStream}
+                    </div>
+                  )}
+                </div>
+              )}
+              {contentStream && (
+                <div className="text-sm select-text">
+                  <MarkdownRenderer content={contentStream} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Inline Phase Checkpoint (Waiting Approval) */}
+        {isWaitingApproval && (
+          <div className="max-w-[90%] border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 rounded-lg p-5 space-y-4 shadow-sm">
+            <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+              <CheckCircle2 className="w-5 h-5" />
+              <span className="text-sm font-semibold">
+                {approvalPhase === "style_review" ? "请确认样式提取结果" : "请确认 Markdown 草稿"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
+              {approvalPhase === "style_review"
+                ? "确认后将锁定制定的模板样式，并进入草稿拟定阶段；若不通过，请提交反馈修改意见。"
+                : "确认后将启动 AST 编译逻辑并写入 Word 模板中；若不通过，请在下方输入您的微调说明。"}
+            </p>
+
+            <div className="flex flex-col gap-3 pt-2">
+              <button
+                onClick={handleApproveAction}
+                disabled={!isConnected}
+                className="w-full h-9 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500 text-white text-xs font-semibold rounded transition-colors duration-150 flex items-center justify-center cursor-pointer shadow-sm"
+              >
+                {isConnected ? "同意并进入下一阶段" : "已断开连接，请刷新并重试"}
+              </button>
+
+              <div className="flex items-center gap-2 border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 rounded p-1.5 shadow-sm">
+                <input
+                  type="text"
+                  placeholder={isConnected ? "在此输入您的修改建议..." : "连接已断开，无法提交反馈..."}
+                  value={feedbackValue}
+                  onChange={(e) => setFeedbackValue(e.target.value)}
+                  disabled={!isConnected}
+                  className="flex-1 bg-transparent px-3 py-1.5 text-xs border-0 outline-0 focus:ring-0 select-text disabled:text-slate-400"
+                />
+                <button
+                  onClick={handleRejectAction}
+                  disabled={!feedbackValue.trim() || !isConnected}
+                  className="h-8 px-4 bg-red-500 hover:bg-red-600 disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500 text-white text-xs font-semibold rounded transition-colors duration-150 cursor-pointer"
+                >
+                  反馈修改
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={chatEndRef} />
       </div>
+
+      {/* Input Prompt Box area */}
+      <footer className="border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shrink-0">
+        <form onSubmit={handleSendPrompt} className="max-w-4xl w-full mx-auto flex items-center gap-3">
+          <input
+            type="text"
+            placeholder={
+              isWaitingApproval
+                ? "审批挂起中，请完成上方确认或提交反馈意见..."
+                : isConnected
+                ? "输入追加排版或段落修改需求..."
+                : "输入需求并包含本地 Word 绝对路径以启动 Agent..."
+            }
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            disabled={isWaitingApproval}
+            className="flex-1 min-h-[40px] bg-slate-50 dark:bg-zinc-850 border border-slate-200 dark:border-zinc-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2 text-sm placeholder:text-slate-400 dark:placeholder:text-zinc-500 outline-0 disabled:bg-slate-100 disabled:text-slate-400 select-text"
+          />
+          <button
+            type="submit"
+            disabled={!inputValue.trim() || isWaitingApproval}
+            className="w-10 h-10 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-100 disabled:text-slate-400 dark:disabled:bg-zinc-850 dark:disabled:text-zinc-600 text-white rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer shadow-sm"
+          >
+            <Send className="w-5 h-5" />
+          </button>
+        </form>
+      </footer>
     </div>
   );
 }
