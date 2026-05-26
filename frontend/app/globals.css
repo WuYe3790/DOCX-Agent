@@ -110,7 +110,9 @@ body {
   list-style-type: disc;
 }
 .prose-flat table {
+  display: block;
   width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   margin: 1rem 0;
 }

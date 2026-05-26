@@ -419,7 +419,7 @@ export default function Home() {
       {/* Main Area divided into: Left (Console) and Right (Workspace) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Side Column: Interactive Chat and Logging console (1/3 weight) */}
-        <div className="w-80 lg:w-[380px] h-full shrink-0">
+        <div className="w-96 lg:w-[440px] h-full shrink-0">
           <ChatPanel
             messages={messages}
             reasoningStream={reasoningStream}
