@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent))
 # Import agent configurations and tools
 from llm_adapter import LLMClientAdapter
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
+from context_manager import MessageManager
 from docx_tools.analyze_docx_style_samples import analyze_docx_style_samples
 from md_tools.parse_markdown_draft import parse_markdown_draft
 from md_tools.markdown_to_word import markdown_to_word
@@ -318,7 +319,8 @@ async def ws_agent(websocket: WebSocket):
     adapter = LLMClientAdapter()
     model = adapter.get_model_name()
     
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    msg_mgr = MessageManager(SYSTEM_PROMPT, token_threshold=150_000)
+    msg_mgr.reset()
     workflow_state = STYLE_REVIEW
     
     try:
@@ -355,7 +357,7 @@ async def ws_agent(websocket: WebSocket):
         append_log(log_path, "启动配置 (Web 终端)", start_config)
         append_log(log_path, "用户输入", user_prompt)
         
-        messages.append({"role": "user", "content": user_prompt})
+        msg_mgr.append_user(user_prompt)
         
         async def send_heartbeat():
             while True:
@@ -370,12 +372,19 @@ async def ws_agent(websocket: WebSocket):
 
         round_index = 0
         while True:
+            # 下一轮前检查是否需要压缩上下文
+            if msg_mgr.should_compress():
+                before = msg_mgr.message_count
+                msg_mgr.compress()
+                after = msg_mgr.message_count
+                append_log(log_path, "上下文压缩", {"before": before, "after": after, "tokens": msg_mgr.total_input_tokens})
+
             round_index += 1
             current_tool_schemas = tool_schemas_for_state(workflow_state)
             current_tool_names = {schema["function"]["name"] for schema in current_tool_schemas}
             
-            combined_system = f"{SYSTEM_PROMPT}\n\n{state_prompt(workflow_state, current_tool_schemas)}"
-            request_messages = [{"role": "system", "content": combined_system}] + messages[1:]
+            state_prompt_text = state_prompt(workflow_state, current_tool_schemas)
+            request_messages = msg_mgr.build_request_messages(state_prompt_text)
             
             # Send current step meta back to frontend
             await websocket.send_json({
@@ -443,6 +452,9 @@ async def ws_agent(websocket: WebSocket):
                 log_msg["reasoning_content"] = accumulated_reasoning
             append_log(log_path, f"第 {round_index} 轮模型响应", log_msg)
 
+            # 更新累计 token 计数
+            msg_mgr.update_token_count(getattr(response, "usage", None))
+
             # Process tool execution if requested
             if tool_calls_map:
                 tool_calls_list = []
@@ -458,10 +470,7 @@ async def ws_agent(websocket: WebSocket):
                     })
                 
                 # Add LLM choice to messages history
-                assistant_msg = {"role": "assistant", "tool_calls": tool_calls_list}
-                if accumulated_content:
-                    assistant_msg["content"] = accumulated_content
-                messages.append(assistant_msg)
+                msg_mgr.append_assistant(tool_calls_list, accumulated_content)
                 
                 # Run each tool call
                 for tc in tool_calls_list:
@@ -502,20 +511,13 @@ async def ws_agent(websocket: WebSocket):
                     })
                     await asyncio.sleep(0)
                     
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result
-                    })
+                    msg_mgr.append_tool_result(tc["id"], result)
                 
                 # Continue LLM completion loop with tool outputs
                 continue
                 
             # No tool calls: LLM finished responding in current round
-            assistant_msg = {"role": "assistant", "content": accumulated_content}
-            if accumulated_reasoning:
-                assistant_msg["reasoning_content"] = accumulated_reasoning
-            messages.append(assistant_msg)
+            msg_mgr.append_assistant([], accumulated_content)
             
             content_stripped = (accumulated_content or "").strip()
             if len(content_stripped) < 200:
@@ -527,7 +529,7 @@ async def ws_agent(websocket: WebSocket):
                     guidance = "请基于当前可用工具直接执行操作或给出分析结果。"
                 
                 append_log(log_path, "空响应自动引导", {"workflow_state": workflow_state, "content_length": len(content_stripped)})
-                messages.append({"role": "user", "content": guidance})
+                msg_mgr.append_user(guidance)
                 
                 await websocket.send_json({
                     "type": "content",
@@ -560,12 +562,9 @@ async def ws_agent(websocket: WebSocket):
                     workflow_state = MD_DRAFT
                     append_log(log_path, "状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
                     continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
-                    messages.append({"role": "user", "content": continue_msg})
+                    msg_mgr.append_user(continue_msg)
                 else:
-                    messages.append({
-                        "role": "user", 
-                        "content": f"用户未确认样式审核结果，并给出反馈意见：{feedback}。请重新分析样式与结构。"
-                    })
+                    msg_mgr.append_user(f"用户未确认样式审核结果，并给出反馈意见：{feedback}。请重新分析样式与结构。")
                     
             elif workflow_state == MD_DRAFT:
                 append_log(log_path, "等待用户确认 Markdown 草稿", {"state": workflow_state})
@@ -591,12 +590,9 @@ async def ws_agent(websocket: WebSocket):
                     workflow_state = WORD_EDITING
                     append_log(log_path, "状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
                     continue_msg = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，用 markdown_to_word 的 actions 编译写入 Word，最后调用 diff_docx 验证。"
-                    messages.append({"role": "user", "content": continue_msg})
+                    msg_mgr.append_user(continue_msg)
                 else:
-                    messages.append({
-                        "role": "user", 
-                        "content": f"用户未通过 Markdown 草稿，修改建议：{feedback}。请利用 write_markdown_draft 修订草稿并展示给用户。"
-                    })
+                    msg_mgr.append_user(f"用户未通过 Markdown 草稿，修改建议：{feedback}。请利用 write_markdown_draft 修订草稿并展示给用户。")
                     
             else: # WORD_EDITING
                 append_log(log_path, "写入与编译流完成", {"state": workflow_state})
@@ -611,7 +607,7 @@ async def ws_agent(websocket: WebSocket):
                 if client_res.get("type") == "continue":
                     next_prompt = client_res.get("prompt", "")
                     append_log(log_path, "用户输入追加需求", next_prompt)
-                    messages.append({"role": "user", "content": next_prompt})
+                    msg_mgr.append_user(next_prompt)
                 else:
                     append_log(log_path, "收到关闭/非继续指令，结束会话", client_res)
                     break
