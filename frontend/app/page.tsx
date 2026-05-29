@@ -259,9 +259,9 @@ export default function Home() {
   };
 
   return (
-    <div className="w-full h-screen flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-50 font-sans">
+    <div className="w-full h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-zinc-950 dark:via-zinc-900 dark:to-zinc-950 text-slate-900 dark:text-zinc-50 font-sans">
       {/* Header Bar */}
-      <header className="h-14 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 flex items-center justify-between shrink-0">
+      <header className="h-14 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <span className="font-mono font-bold text-sm tracking-wider uppercase text-slate-800 dark:text-zinc-100">
             DOCX-Agent 交互工作台
@@ -307,10 +307,11 @@ export default function Home() {
       </header>
 
       {/* Main Chat Flow Container */}
-      <div className="flex-1 overflow-y-auto relative px-4 py-6 md:px-8 max-w-4xl w-full mx-auto space-y-6">
+      <div className="flex-1 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        <div className="max-w-4xl w-full mx-auto py-6 space-y-6 px-4 md:px-8">
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-zinc-500 select-none space-y-4">
-            <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-400 dark:text-zinc-500">
+            <div className="w-14 h-14 rounded-2xl bg-slate-100/80 dark:bg-zinc-800/80 shadow-sm flex items-center justify-center text-slate-400 dark:text-zinc-500">
               <Terminal className="w-6 h-6" />
             </div>
             <div className="max-w-md">
@@ -318,8 +319,8 @@ export default function Home() {
               <p className="text-xs text-slate-400 dark:text-zinc-500 mt-2 leading-relaxed font-mono text-left">
                 请输入您的提问或排版需求，让 Agent 开始自主分析运行。<br /><br />
                 <strong>示例需求：</strong><br />
-                <span className="text-indigo-600 dark:text-indigo-400 text-[11px] block mt-1 bg-slate-100 dark:bg-zinc-800 p-2 rounded border border-slate-200 dark:border-zinc-700 select-text">
-                  把 <code>文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx</code> 中的“依据实验指导书”后插入“测试文本”，另存为 out/demo.docx，并对比原文档。
+                <span className="text-indigo-400 dark:text-indigo-400 text-[11px] block mt-1 bg-slate-100/60 dark:bg-zinc-800/60 p-3 rounded-xl leading-relaxed select-text">
+                  把 <code>文档格式测试/cases/insert_text_001/docx/实验报告模板_v3_insert_text_001.docx</code> 中的"依据实验指导书"后插入"测试文本"，另存为 out/demo.docx，并对比原文档。
                 </span>
               </p>
             </div>
@@ -525,10 +526,11 @@ export default function Home() {
         )}
 
         <div ref={chatEndRef} />
+        </div>
       </div>
 
       {/* Input Prompt Box area */}
-      <footer className="border-t border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shrink-0">
+      <footer className="bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky bottom-0 z-50 p-4 shrink-0">
         <form onSubmit={handleSendPrompt} className="max-w-4xl w-full mx-auto flex items-center gap-3">
           <input
             type="text"
@@ -542,12 +544,12 @@ export default function Home() {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             disabled={isWaitingApproval}
-            className="flex-1 min-h-[40px] bg-slate-50 dark:bg-zinc-850 border border-slate-200 dark:border-zinc-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg px-4 py-2 text-sm placeholder:text-slate-400 dark:placeholder:text-zinc-500 outline-0 disabled:bg-slate-100 disabled:text-slate-400 select-text"
+            className="flex-1 min-h-[44px] bg-white/80 dark:bg-zinc-800/80 border border-slate-200/60 dark:border-zinc-700/60 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 rounded-xl px-4 py-2 text-sm placeholder:text-slate-400 dark:placeholder:text-zinc-500 outline-0 disabled:bg-slate-100 disabled:text-slate-400 select-text shadow-sm backdrop-blur-sm"
           />
           <button
             type="submit"
             disabled={!inputValue.trim() || isWaitingApproval}
-            className="w-10 h-10 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-100 disabled:text-slate-400 dark:disabled:bg-zinc-850 dark:disabled:text-zinc-600 text-white rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer shadow-sm"
+            className="w-11 h-11 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-100 dark:disabled:bg-zinc-850 dark:disabled:text-zinc-600 text-white rounded-xl flex items-center justify-center shadow-sm hover:shadow-md transition-all duration-150 cursor-pointer"
           >
             <Send className="w-5 h-5" />
           </button>
