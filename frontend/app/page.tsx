@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench, RefreshCw, User } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
@@ -352,7 +352,7 @@ export default function Home() {
             return (
               <motion.div
                 key={`tool-group-${index}`}
-                className="flex flex-wrap gap-2 max-w-[90%] my-4"
+                className="flex flex-wrap gap-x-4 gap-y-1 max-w-[90%] my-3 pl-3 border-l-2 border-slate-200/60 dark:border-zinc-800/60"
                 layout
               >
                 <AnimatePresence mode="popLayout">
@@ -363,52 +363,48 @@ export default function Home() {
                         key={tool.id || `tool-${tIdx}`}
                         className="relative"
                         layout
-                        initial={{ opacity: 0, scale: 0.8, y: 10 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, transition: { duration: 0.1 } }}
                         transition={{ type: "spring", stiffness: 400, damping: 25 }}
                       >
-                        {/* Pill Badge */}
-                        <motion.div
+                        {/* Ghost Text Tool Name */}
+                        <span
                           onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
-                          className={`inline-flex items-center gap-1.5 h-7 pl-1.5 pr-3 rounded-full cursor-pointer select-none ${
+                          className={`inline-flex items-center gap-1 font-mono text-[11px] cursor-pointer select-none ${
                             tool.toolStatus === "running"
-                              ? "bg-blue-500/10 dark:bg-blue-500/20 border border-blue-400/30"
-                              : tool.toolStatus === "success"
-                              ? "bg-zinc-100 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700"
-                              : "bg-red-500/10 dark:bg-red-500/20 border border-red-400/30"
+                              ? "text-blue-400 dark:text-blue-400"
+                              : tool.toolStatus === "error"
+                              ? "text-red-400 dark:text-red-400"
+                              : "text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-400"
                           } ${tool.toolStatus === "running" ? "animate-pulse" : ""}`}
                         >
-                          <Wrench size={13} className={tool.toolStatus === "running" ? "text-blue-500" : tool.toolStatus === "success" ? "text-zinc-500 dark:text-zinc-400" : "text-red-500"} />
-                          <span className="text-[11px] font-mono text-slate-700 dark:text-zinc-300">{tool.toolName}</span>
-                          <div className={`w-1.5 h-1.5 rounded-full ${tool.toolStatus === "running" ? "bg-blue-500" : tool.toolStatus === "success" ? "bg-zinc-400" : "bg-red-500"}`} />
-                        </motion.div>
+                          <span className="text-slate-300 dark:text-zinc-700 text-[10px]">{">"}_{
+                            tool.toolName
+                          }</span>
+                        </span>
 
-                        {/* Expanded Detail Panel */}
-                        <div
-                          className={`absolute top-full left-0 z-20 mt-1 w-80 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-md shadow-lg overflow-hidden transition-all duration-300 ease-out ${
-                            isExpanded ? "opacity-100 visible" : "opacity-0 invisible"
-                          }`}
-                        >
-                          <div className="p-3 space-y-2">
+                        {/* Soft Detail Panel */}
+                        {isExpanded && (
+                          <div className="mt-2 w-full max-w-[600px] border border-slate-200/60 dark:border-zinc-800/60 bg-slate-50/80 dark:bg-zinc-900/50 backdrop-blur-sm rounded-md p-3 space-y-3 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                             {tool.toolArgs && (
                               <div>
-                                <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
-                                <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
+                                <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">args</p>
+                                <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-40 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                                   {tool.toolArgs}
                                 </pre>
                               </div>
                             )}
                             {tool.toolResult && (
                               <div>
-                                <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
-                                <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto">
+                                <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">result</p>
+                                <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                                   {tool.toolResult}
                                 </pre>
                               </div>
                             )}
                           </div>
-                        </div>
+                        )}
                       </motion.div>
                     );
                   })}
