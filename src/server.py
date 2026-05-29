@@ -372,13 +372,6 @@ async def ws_agent(websocket: WebSocket):
 
         round_index = 0
         while True:
-            # 下一轮前检查是否需要压缩上下文
-            if msg_mgr.should_compress():
-                before = msg_mgr.message_count
-                msg_mgr.compress()
-                after = msg_mgr.message_count
-                append_log(log_path, "上下文压缩", {"before": before, "after": after, "tokens": msg_mgr.total_input_tokens})
-
             round_index += 1
             current_tool_schemas = tool_schemas_for_state(workflow_state)
             current_tool_names = {schema["function"]["name"] for schema in current_tool_schemas}
