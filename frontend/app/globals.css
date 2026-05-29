@@ -140,6 +140,16 @@ body {
   margin: 1rem 0;
 }
 
+/* Tool panel expand animations */
+@keyframes expand-panel {
+  from { transform: scaleY(0); opacity: 0; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+@keyframes collapse-panel {
+  from { transform: scaleY(1); opacity: 1; }
+  to { transform: scaleY(0); opacity: 0; }
+}
+
 /* Gemini-style thinking indicator animations */
 @keyframes thinking-spin { to { transform: rotate(360deg); } }
 @keyframes thinking-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

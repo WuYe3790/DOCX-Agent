@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench, RefreshCw } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
 interface Message {
@@ -33,6 +34,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [thinkingStartTime, setThinkingStartTime] = useState<number | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -52,9 +54,10 @@ export default function Home() {
     setApprovalPhase(null);
     setIsGenerating(false);
     setThinkingStartTime(null);
+    setExpandedTools(new Set());
+    setSelectedToolId(null);
     setInputValue("");
     setFeedbackValue("");
-    setExpandedTools(new Set());
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -333,51 +336,90 @@ export default function Home() {
               </div>
             );
           } else if (msg.role === "tool") {
-            const isExpanded = expandedTools.has(msg.id || "");
-            return (
-              <div key={index} className="flex flex-col items-start w-full">
-                {/* Pill Badge - collapsed */}
-                <div
-                  onClick={() => msg.id && toggleToolExpanded(msg.id)}
-                  className={`inline-flex items-center gap-1.5 h-7 pl-1.5 pr-3 rounded-full cursor-pointer select-none transition-all duration-300 ${
-                    msg.toolStatus === "running"
-                      ? "bg-blue-500/10 dark:bg-blue-500/20 border border-blue-400/30"
-                      : msg.toolStatus === "success"
-                      ? "bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-400/30"
-                      : "bg-red-500/10 dark:bg-red-500/20 border border-red-400/30"
-                  } ${msg.toolStatus === "running" ? "animate-pulse" : ""}`}
-                >
-                  <Wrench size={13} className={msg.toolStatus === "running" ? "text-blue-500" : msg.toolStatus === "success" ? "text-emerald-500" : "text-red-500"} />
-                  <span className="text-[11px] font-mono font-medium text-slate-700 dark:text-zinc-300">{msg.toolName}</span>
-                  <div className={`w-1.5 h-1.5 rounded-full ${msg.toolStatus === "running" ? "bg-blue-500" : msg.toolStatus === "success" ? "bg-emerald-500" : "bg-red-500"}`} />
-                </div>
+            // Skip if already part of a group (consecutive tools merged earlier)
+            if (index > 0 && messages[index - 1].role === "tool") {
+              return null;
+            }
 
-                {/* Expandable Detail Panel */}
-                <div
-                  className={`w-full max-w-[90%] overflow-hidden transition-all duration-300 ease-in-out ${
-                    isExpanded ? "max-h-96 opacity-100 mt-2" : "max-h-0 opacity-0"
-                  }`}
-                >
-                  <div className="bg-white/80 dark:bg-zinc-800/80 backdrop-blur-md border border-slate-200 dark:border-zinc-700 rounded-xl p-3 space-y-2">
-                    {msg.toolArgs && (
-                      <div>
-                        <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
-                        <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-24 overflow-y-auto">
-                          {msg.toolArgs}
-                        </pre>
-                      </div>
-                    )}
-                    {msg.toolResult && (
-                      <div>
-                        <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
-                        <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                          {msg.toolResult}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+            // Collect all consecutive tool messages into a group
+            const toolGroup: any[] = [];
+            let j = index;
+            while (j < messages.length && messages[j].role === "tool") {
+              toolGroup.push(messages[j]);
+              j++;
+            }
+
+            return (
+              <motion.div
+                key={`tool-group-${index}`}
+                className="flex flex-wrap gap-2 max-w-[90%] my-2"
+                layout
+              >
+                <AnimatePresence mode="popLayout">
+                  {toolGroup.map((tool, tIdx) => {
+                    const isExpanded = selectedToolId === tool.id;
+                    return (
+                      <motion.div
+                        key={tool.id || `tool-${tIdx}`}
+                        className="relative"
+                        layout
+                        initial={{ opacity: 0, scale: 0.8, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.15 } }}
+                        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                      >
+                        {/* Pill Badge */}
+                        <motion.div
+                          onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
+                          className={`inline-flex items-center gap-1.5 h-7 pl-1.5 pr-3 rounded-full cursor-pointer select-none ${
+                            tool.toolStatus === "running"
+                              ? "bg-blue-500/10 dark:bg-blue-500/20 border border-blue-400/30"
+                              : tool.toolStatus === "success"
+                              ? "bg-zinc-100 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700"
+                              : "bg-red-500/10 dark:bg-red-500/20 border border-red-400/30"
+                          } ${tool.toolStatus === "running" ? "animate-pulse" : ""}`}
+                        >
+                          <Wrench size={13} className={tool.toolStatus === "running" ? "text-blue-500" : tool.toolStatus === "success" ? "text-zinc-500 dark:text-zinc-400" : "text-red-500"} />
+                          <span className="text-[11px] font-mono text-slate-700 dark:text-zinc-300">{tool.toolName}</span>
+                          <div className={`w-1.5 h-1.5 rounded-full ${tool.toolStatus === "running" ? "bg-blue-500" : tool.toolStatus === "success" ? "bg-zinc-400" : "bg-red-500"}`} />
+                        </motion.div>
+
+                        {/* Expanded Detail Panel */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: -8, scale: 0.95, transition: { duration: 0.15 } }}
+                              transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                              className="absolute top-full left-0 z-20 mt-1 w-80 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-md shadow-lg overflow-hidden"
+                            >
+                              <div className="p-3 space-y-2">
+                                {tool.toolArgs && (
+                                  <div>
+                                    <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
+                                    <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
+                                      {tool.toolArgs}
+                                    </pre>
+                                  </div>
+                                )}
+                                {tool.toolResult && (
+                                  <div>
+                                    <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
+                                    <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto">
+                                      {tool.toolResult}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </motion.div>
             );
           } else {
             // Assistant Message
@@ -430,24 +472,16 @@ export default function Home() {
           </div>
         )}
 
-        {/* Gemini-style Thinking Indicator - immediately after last message */}
+        {/* Ghost-style Thinking Indicator */}
         {isGenerating && !reasoningStream && !contentStream && (
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex-shrink-0 flex items-center justify-center shadow-sm">
-              <div className="w-3 h-3 relative">
-                <div className="absolute inset-0 rounded-full border border-white/40" />
-                <div className="absolute inset-0 rounded-full border border-transparent border-t-white/70 thinking-spin" />
-              </div>
+          <div className="flex items-center gap-3 mt-3 px-1">
+            <div className="relative flex items-center justify-center w-5 h-5">
+              <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
+              <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-indigo-500 animate-spin"></div>
             </div>
-            <div className="backdrop-blur-md bg-white/70 dark:bg-zinc-800/70 rounded-2xl rounded-tl-md px-4 py-2.5 shadow-sm border border-white/20 dark:border-zinc-700/50">
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 relative flex-shrink-0">
-                  <div className="absolute inset-0 rounded-full border border-indigo-200 dark:border-indigo-700" />
-                  <div className="absolute inset-0 rounded-full border border-transparent border-t-indigo-400 dark:border-t-indigo-500 thinking-spin" />
-                </div>
-                <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 thinking-pulse">Agent 思考中...</span>
-              </div>
-            </div>
+            <span className="text-xs font-mono font-medium text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-slate-400 animate-pulse">
+              Agent 深度思考与调度中...
+            </span>
           </div>
         )}
 
