@@ -139,3 +139,9 @@ body {
   font-style: italic;
   margin: 1rem 0;
 }
+
+/* Gemini-style thinking indicator animations */
+@keyframes thinking-spin { to { transform: rotate(360deg); } }
+@keyframes thinking-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.thinking-spin { animation: thinking-spin 1.2s linear infinite; }
+.thinking-pulse { animation: thinking-pulse 2s ease-in-out infinite; }

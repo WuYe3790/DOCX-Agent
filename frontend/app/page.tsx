@@ -31,6 +31,7 @@ export default function Home() {
   const [feedbackValue, setFeedbackValue] = useState<string>("");
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [thinkingStartTime, setThinkingStartTime] = useState<number | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [tokenCount, setTokenCount] = useState<number>(0);
 
@@ -50,6 +51,7 @@ export default function Home() {
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     setIsGenerating(false);
+    setThinkingStartTime(null);
     setInputValue("");
     setFeedbackValue("");
     setExpandedTools(new Set());
@@ -99,6 +101,7 @@ export default function Home() {
           setReasoningStream("");
           setContentStream("");
           setIsGenerating(true);
+          setThinkingStartTime(Date.now());
           if (data.token_count !== undefined) {
             setTokenCount(data.token_count);
           }
@@ -116,7 +119,6 @@ export default function Home() {
           break;
 
         case "tool_start":
-          setIsGenerating(false);
           setMessages((prev) => [
             ...prev,
             {
@@ -302,7 +304,7 @@ export default function Home() {
       </header>
 
       {/* Main Chat Flow Container */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 max-w-4xl w-full mx-auto space-y-6">
+      <div className="flex-1 overflow-y-auto relative px-4 py-6 md:px-8 max-w-4xl w-full mx-auto space-y-6">
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-zinc-500 select-none space-y-4">
             <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-400 dark:text-zinc-500">
@@ -334,54 +336,46 @@ export default function Home() {
             const isExpanded = expandedTools.has(msg.id || "");
             return (
               <div key={index} className="flex flex-col items-start w-full">
-                <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-slate-100/50 dark:bg-zinc-900/30 rounded-lg p-3 font-mono text-xs text-slate-600 dark:text-zinc-400">
-                  <div
-                    className="flex items-center justify-between cursor-pointer hover:bg-slate-200/50 dark:hover:bg-zinc-800/30 rounded -mx-2 px-2 py-1 -my-1"
-                    onClick={() => msg.id && toggleToolExpanded(msg.id)}
-                  >
-                    <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-zinc-300">
-                      <Wrench className="w-3.5 h-3.5" />
-                      <span>调用工具: {msg.toolName}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-sans font-semibold tracking-wide ${
-                          msg.toolStatus === "running"
-                            ? "bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 animate-pulse"
-                            : msg.toolStatus === "success"
-                            ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400"
-                            : "bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"
-                        }`}
-                      >
-                        {msg.toolStatus === "running" ? "运行中" : msg.toolStatus === "success" ? "成功" : "失败"}
-                      </span>
-                      <span className="text-slate-400">
-                        {isExpanded ? "▲" : "▼"}
-                      </span>
-                    </div>
+                {/* Pill Badge - collapsed */}
+                <div
+                  onClick={() => msg.id && toggleToolExpanded(msg.id)}
+                  className={`inline-flex items-center gap-1.5 h-7 pl-1.5 pr-3 rounded-full cursor-pointer select-none transition-all duration-300 ${
+                    msg.toolStatus === "running"
+                      ? "bg-blue-500/10 dark:bg-blue-500/20 border border-blue-400/30"
+                      : msg.toolStatus === "success"
+                      ? "bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-400/30"
+                      : "bg-red-500/10 dark:bg-red-500/20 border border-red-400/30"
+                  } ${msg.toolStatus === "running" ? "animate-pulse" : ""}`}
+                >
+                  <Wrench size={13} className={msg.toolStatus === "running" ? "text-blue-500" : msg.toolStatus === "success" ? "text-emerald-500" : "text-red-500"} />
+                  <span className="text-[11px] font-mono font-medium text-slate-700 dark:text-zinc-300">{msg.toolName}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${msg.toolStatus === "running" ? "bg-blue-500" : msg.toolStatus === "success" ? "bg-emerald-500" : "bg-red-500"}`} />
+                </div>
+
+                {/* Expandable Detail Panel */}
+                <div
+                  className={`w-full max-w-[90%] overflow-hidden transition-all duration-300 ease-in-out ${
+                    isExpanded ? "max-h-96 opacity-100 mt-2" : "max-h-0 opacity-0"
+                  }`}
+                >
+                  <div className="bg-white/80 dark:bg-zinc-800/80 backdrop-blur-md border border-slate-200 dark:border-zinc-700 rounded-xl p-3 space-y-2">
+                    {msg.toolArgs && (
+                      <div>
+                        <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
+                        <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-24 overflow-y-auto">
+                          {msg.toolArgs}
+                        </pre>
+                      </div>
+                    )}
+                    {msg.toolResult && (
+                      <div>
+                        <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
+                        <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                          {msg.toolResult}
+                        </pre>
+                      </div>
+                    )}
                   </div>
-
-                  {isExpanded && (
-                    <>
-                      {msg.toolArgs && (
-                        <div className="mb-2 mt-2 text-[10px] text-slate-500">
-                          <span className="font-semibold">参数:</span>
-                          <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto whitespace-pre-wrap break-all">
-                            {msg.toolArgs}
-                          </pre>
-                        </div>
-                      )}
-
-                      {msg.toolResult && (
-                        <div className="mt-2 text-[10px] text-slate-500">
-                          <span className="font-semibold">执行结果:</span>
-                          <pre className="mt-1 bg-slate-50 dark:bg-zinc-850 p-2 rounded border border-slate-100 dark:border-zinc-750 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
-                            {msg.toolResult}
-                          </pre>
-                        </div>
-                      )}
-                    </>
-                  )}
                 </div>
               </div>
             );
@@ -407,16 +401,6 @@ export default function Home() {
           }
         })}
 
-        {/* Active Thinking/Generating Indicator */}
-        {isGenerating && !reasoningStream && !contentStream && (
-          <div className="flex flex-col items-start w-full">
-            <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 flex items-center gap-3 shadow-sm">
-              <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />
-              <span className="text-xs font-mono text-slate-500">Agent 正在请求模型中，请稍候...</span>
-            </div>
-          </div>
-        )}
-
         {/* Real-time Streaming Response */}
         {(reasoningStream || contentStream) && (
           <div className="flex flex-col items-start w-full">
@@ -427,7 +411,7 @@ export default function Home() {
                     onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
                     className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold text-slate-400 dark:text-zinc-500 font-mono uppercase bg-slate-100/50 dark:bg-zinc-850/50 hover:bg-slate-100 dark:hover:bg-zinc-800"
                   >
-                    <span>思考中...</span>
+                    <span>{isThinkingExpanded ? "收起思考过程" : "已思考 " + (thinkingStartTime ? Math.round((Date.now() - thinkingStartTime) / 1000) : 0) + " 秒"}</span>
                     {isThinkingExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                   </button>
                   {isThinkingExpanded && (
@@ -442,6 +426,27 @@ export default function Home() {
                   <MarkdownRenderer content={contentStream} />
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Gemini-style Thinking Indicator - immediately after last message */}
+        {isGenerating && !reasoningStream && !contentStream && (
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex-shrink-0 flex items-center justify-center shadow-sm">
+              <div className="w-3 h-3 relative">
+                <div className="absolute inset-0 rounded-full border border-white/40" />
+                <div className="absolute inset-0 rounded-full border border-transparent border-t-white/70 thinking-spin" />
+              </div>
+            </div>
+            <div className="backdrop-blur-md bg-white/70 dark:bg-zinc-800/70 rounded-2xl rounded-tl-md px-4 py-2.5 shadow-sm border border-white/20 dark:border-zinc-700/50">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 relative flex-shrink-0">
+                  <div className="absolute inset-0 rounded-full border border-indigo-200 dark:border-indigo-700" />
+                  <div className="absolute inset-0 rounded-full border border-transparent border-t-indigo-400 dark:border-t-indigo-500 thinking-spin" />
+                </div>
+                <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 thinking-pulse">Agent 思考中...</span>
+              </div>
             </div>
           </div>
         )}
