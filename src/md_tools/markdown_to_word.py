@@ -67,10 +67,7 @@ def markdown_to_word(
                     "action_index": index,
                     "type": action_type,
                     "status": parsed.get("status"),
-                    "output_path": current_output if is_final_action else None,
                     "temporary_output_path": None if is_final_action else current_output,
-                    "temporary_output_cleaned": not is_final_action,
-                    "result": _response_result(parsed, is_final_action, current_output),
                 }
             )
             if parsed.get("status") != "ok":
