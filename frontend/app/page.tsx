@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench, RefreshCw } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, Wrench, RefreshCw, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
@@ -330,10 +330,9 @@ export default function Home() {
         {messages.map((msg, index) => {
           if (msg.role === "user") {
             return (
-              <div key={index} className="flex flex-col items-end">
-                <div className="max-w-[85%] rounded-lg px-4 py-3 bg-indigo-600 text-white border border-indigo-700 select-text text-sm">
-                  <p className="whitespace-pre-wrap select-text">{msg.content}</p>
-                </div>
+              <div key={index} className="mb-6 pl-9 relative">
+                <User size={14} className="absolute left-0 top-[2px] text-indigo-400 dark:text-indigo-500" />
+                <p className="whitespace-pre-wrap select-text text-[15px] font-medium text-slate-800 dark:text-zinc-100 leading-relaxed">{msg.content}</p>
               </div>
             );
           } else if (msg.role === "tool") {
@@ -353,7 +352,7 @@ export default function Home() {
             return (
               <motion.div
                 key={`tool-group-${index}`}
-                className="flex flex-wrap gap-2 max-w-[90%] my-2"
+                className="flex flex-wrap gap-2 max-w-[90%] my-4"
                 layout
               >
                 <AnimatePresence mode="popLayout">
@@ -417,22 +416,20 @@ export default function Home() {
               </motion.div>
             );
           } else {
-            // Assistant Message
+            // Assistant Message — frameless typography
             return (
-              <div key={index} className="flex flex-col items-start w-full select-text">
-                <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 space-y-3 shadow-sm">
-                  {msg.reasoning_content && (
-                    <div className="p-3 bg-slate-50 dark:bg-zinc-850 border-l-2 border-slate-300 dark:border-zinc-700 text-xs text-slate-500 dark:text-zinc-400 font-mono rounded">
-                      <p className="font-semibold mb-1 text-[10px] tracking-wider text-slate-400 dark:text-zinc-500 uppercase">思考路径 (DeepSeek Reasoning)</p>
-                      <p className="whitespace-pre-wrap select-text">{msg.reasoning_content}</p>
-                    </div>
-                  )}
-                  {msg.content && (
-                    <div className="text-sm select-text">
-                      <MarkdownRenderer content={msg.content} />
-                    </div>
-                  )}
-                </div>
+              <div key={index} className="mb-8 select-text">
+                {msg.reasoning_content && (
+                  <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm">
+                    <p className="text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider mb-1">深度思考</p>
+                    <p className="text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">{msg.reasoning_content}</p>
+                  </div>
+                )}
+                {msg.content && (
+                  <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                )}
               </div>
             );
           }
@@ -440,30 +437,28 @@ export default function Home() {
 
         {/* Real-time Streaming Response */}
         {(reasoningStream || contentStream) && (
-          <div className="flex flex-col items-start w-full">
-            <div className="w-full max-w-[90%] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg p-4 space-y-3 shadow-sm">
-              {reasoningStream && (
-                <div className="border-l-2 border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-850 rounded overflow-hidden">
-                  <button
-                    onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold text-slate-400 dark:text-zinc-500 font-mono uppercase bg-slate-100/50 dark:bg-zinc-850/50 hover:bg-slate-100 dark:hover:bg-zinc-800"
-                  >
-                    <span>{isThinkingExpanded ? "收起思考过程" : "已思考 " + (thinkingStartTime ? Math.round((Date.now() - thinkingStartTime) / 1000) : 0) + " 秒"}</span>
-                    {isThinkingExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  </button>
-                  {isThinkingExpanded && (
-                    <div className="p-3 text-xs text-slate-500 dark:text-zinc-400 font-mono whitespace-pre-wrap max-h-[160px] overflow-y-auto border-t border-slate-200 dark:border-zinc-750">
-                      {reasoningStream}
-                    </div>
-                  )}
-                </div>
-              )}
-              {contentStream && (
-                <div className="text-sm select-text">
-                  <MarkdownRenderer content={contentStream} />
-                </div>
-              )}
-            </div>
+          <div className="mb-8 select-text">
+            {reasoningStream && (
+              <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
+                <button
+                  onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
+                >
+                  <span>{isThinkingExpanded ? "收起思考过程" : "已思考 " + (thinkingStartTime ? Math.round((Date.now() - thinkingStartTime) / 1000) : 0) + " 秒"}</span>
+                  {isThinkingExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+                {isThinkingExpanded && (
+                  <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+                    {reasoningStream}
+                  </div>
+                )}
+              </div>
+            )}
+            {contentStream && (
+              <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
+                <MarkdownRenderer content={contentStream} />
+              </div>
+            )}
           </div>
         )}
 
