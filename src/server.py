@@ -322,6 +322,7 @@ async def ws_agent(websocket: WebSocket):
     msg_mgr = MessageManager(SYSTEM_PROMPT, token_threshold=150_000)
     msg_mgr.reset()
     workflow_state = STYLE_REVIEW
+    stage_called_tools = {}  # {stage_name: set(tool_names)}
     
     try:
         # Wait for the start trigger from frontend
@@ -507,7 +508,12 @@ async def ws_agent(websocket: WebSocket):
                     await asyncio.sleep(0)
                     
                     msg_mgr.append_tool_result(tc["id"], result)
-                
+
+                    # 追踪本阶段调用过的工具
+                    if workflow_state not in stage_called_tools:
+                        stage_called_tools[workflow_state] = set()
+                    stage_called_tools[workflow_state].add(name)
+
                 # Continue LLM completion loop with tool outputs
                 continue
                 
@@ -534,6 +540,17 @@ async def ws_agent(websocket: WebSocket):
             
             # State Machine Checkpoint Transitions
             if workflow_state == STYLE_REVIEW:
+                # 阶段校验：必须先调用样式分析工具才能推进阶段
+                if "analyze_docx_style_samples" not in stage_called_tools.get(STYLE_REVIEW, set()):
+                    correction_msg = "请先调用 analyze_docx_style_samples 分析文档样式，再进行其他操作。"
+                    msg_mgr.append_user(correction_msg)
+                    append_log(log_path, "阶段校验失败", {"reason": "未调用样式分析工具", "correction": correction_msg})
+                    await websocket.send_json({
+                        "type": "content",
+                        "delta": f"\n\n*[系统提示] {correction_msg}*"
+                    })
+                    continue  # 不发送 wait_approval，强制模型重试
+
                 append_log(log_path, "等待用户确认样式审核", {"state": workflow_state})
                 # Tell client we are waiting for style approval
                 await websocket.send_json({
@@ -554,6 +571,7 @@ async def ws_agent(websocket: WebSocket):
                 append_log(log_path, "用户样式审核确认", {"approved": approved, "feedback": feedback})
                 
                 if approved:
+                    stage_called_tools.pop(STYLE_REVIEW, None)  # 清空样式审核阶段的追踪
                     workflow_state = MD_DRAFT
                     append_log(log_path, "状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
                     continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
