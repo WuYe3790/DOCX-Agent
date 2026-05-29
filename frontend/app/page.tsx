@@ -15,6 +15,10 @@ interface Message {
   id?: string;
 }
 
+interface TokenInfo {
+  token_count: number;
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reasoningStream, setReasoningStream] = useState<string>("");
@@ -28,6 +32,7 @@ export default function Home() {
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [tokenCount, setTokenCount] = useState<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -94,6 +99,9 @@ export default function Home() {
           setReasoningStream("");
           setContentStream("");
           setIsGenerating(true);
+          if (data.token_count !== undefined) {
+            setTokenCount(data.token_count);
+          }
           break;
 
         case "heartbeat":
@@ -266,6 +274,23 @@ export default function Home() {
             <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
             <span className="text-xs font-mono text-slate-500">{isConnected ? "已连接" : "已断开"}</span>
           </div>
+
+          {/* Token Usage Bar */}
+          {tokenCount > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-24 h-1.5 bg-slate-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    tokenCount > 150000 ? "bg-amber-500" : tokenCount > 100000 ? "bg-emerald-500" : "bg-indigo-500"
+                  }`}
+                  style={{ width: `${Math.min((tokenCount / 200000) * 100, 100)}%` }}
+                />
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">
+                {tokenCount > 1000 ? `${(tokenCount / 1000).toFixed(0)}k` : tokenCount}
+              </span>
+            </div>
+          )}
 
           <button
             onClick={resetWorkspace}

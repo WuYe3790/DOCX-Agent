@@ -384,7 +384,8 @@ async def ws_agent(websocket: WebSocket):
                 "type": "round_start",
                 "round": round_index,
                 "workflow_state": workflow_state,
-                "allowed_tools": list(current_tool_names)
+                "allowed_tools": list(current_tool_names),
+                "token_count": msg_mgr.total_input_tokens,
             })
             
             # Log model request
@@ -393,6 +394,7 @@ async def ws_agent(websocket: WebSocket):
                 "model": model,
                 "workflow_state": workflow_state,
                 "message_count": len(request_messages),
+                "token_count": msg_mgr.total_input_tokens,
                 "tool_names": sorted(list(current_tool_names)),
             }
             append_log(log_path, f"第 {round_index} 轮模型请求", req_log)
