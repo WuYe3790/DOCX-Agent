@@ -395,8 +395,6 @@ async def ws_agent(websocket: WebSocket):
                 "model": model,
                 "workflow_state": workflow_state,
                 "message_count": len(request_messages),
-                "last_prompt_tokens": msg_mgr.last_prompt_tokens,    # 上一轮请求的 token 数
-                "total_input_tokens": msg_mgr.total_input_tokens,   # 累计 token 数
                 "tool_names": sorted(list(current_tool_names)),
             }
             append_log(log_path, f"第 {round_index} 轮模型请求", req_log)
@@ -449,15 +447,14 @@ async def ws_agent(websocket: WebSocket):
                 log_msg["reasoning_content"] = accumulated_reasoning
             append_log(log_path, f"第 {round_index} 轮模型响应", log_msg)
 
-            # 更新 token 计数（累计 + 上一轮）
+            # 更新 token 计数并记录
             usage = getattr(response, "usage", None)
             msg_mgr.update_token_count(usage)
-            current_prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
-            append_log(log_path, f"第 {round_index} 轮 token 详情", {
-                "current_prompt_tokens": current_prompt_tokens,
-                "last_prompt_tokens": msg_mgr.last_prompt_tokens,
-                "total_input_tokens": msg_mgr.total_input_tokens,
-            })
+            if usage:
+                append_log(log_path, f"第 {round_index} 轮 token", {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                })
 
             # Process tool execution if requested
             if tool_calls_map:
