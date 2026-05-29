@@ -473,43 +473,48 @@ export default function Home() {
 
         {/* Inline Phase Checkpoint (Waiting Approval) */}
         {isWaitingApproval && (
-          <div className="max-w-[90%] border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 rounded-lg p-5 space-y-4 shadow-sm">
-            <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
-              <CheckCircle2 className="w-5 h-5" />
-              <span className="text-sm font-semibold">
-                {approvalPhase === "style_review" ? "请确认样式提取结果" : "请确认 Markdown 草稿"}
-              </span>
+          <div className="mb-8 space-y-3">
+            {/* Floating Hint Text - no container, pure typography */}
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400 dark:text-indigo-500 shrink-0" />
+              <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
+                {approvalPhase === "style_review"
+                  ? "样式已提取完毕，请确认后进入草稿拟定阶段；如需修改请输入反馈"
+                  : "草稿已生成，请确认后启动编译写入；若需调整请提交反馈"}
+              </p>
             </div>
-            <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              {approvalPhase === "style_review"
-                ? "确认后将锁定制定的模板样式，并进入草稿拟定阶段；若不通过，请提交反馈修改意见。"
-                : "确认后将启动 AST 编译逻辑并写入 Word 模板中；若不通过，请在下方输入您的微调说明。"}
-            </p>
 
-            <div className="flex flex-col gap-3 pt-2">
+            {/* Elegant Inline Control Bar */}
+            <div className="flex flex-row items-center gap-3">
+              {/* Approve Capsule */}
               <button
                 onClick={handleApproveAction}
                 disabled={!isConnected}
-                className="w-full h-9 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500 text-white text-xs font-semibold rounded transition-colors duration-150 flex items-center justify-center cursor-pointer shadow-sm"
+                className="w-fit px-5 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 disabled:bg-slate-100/60 dark:disabled:bg-zinc-800/60 disabled:text-slate-400 text-indigo-600 dark:text-indigo-400 text-[12px] font-medium rounded-full border border-indigo-500/20 hover:border-indigo-500/30 shadow-sm hover:shadow-md transition-all duration-150 flex items-center justify-center cursor-pointer shrink-0"
               >
-                {isConnected ? "同意并进入下一阶段" : "已断开连接，请刷新并重试"}
+                {isConnected ? "同意并进入下一阶段" : "已断开连接"}
               </button>
 
-              <div className="flex items-center gap-2 border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 rounded p-1.5 shadow-sm">
+              {/* Feedback Input Row */}
+              <div className="flex-1 flex items-center gap-2 bg-slate-50/60 dark:bg-zinc-900/40 border border-slate-200/50 dark:border-zinc-700/50 rounded-full px-4 py-1.5">
                 <input
                   type="text"
-                  placeholder={isConnected ? "在此输入您的修改建议..." : "连接已断开，无法提交反馈..."}
+                  placeholder={isConnected ? "输入修改建议..." : ""}
                   value={feedbackValue}
                   onChange={(e) => setFeedbackValue(e.target.value)}
                   disabled={!isConnected}
-                  className="flex-1 bg-transparent px-3 py-1.5 text-xs border-0 outline-0 focus:ring-0 select-text disabled:text-slate-400"
+                  className="flex-1 bg-transparent text-xs text-slate-600 dark:text-zinc-300 border-0 outline-0 focus:ring-0 select-text disabled:text-slate-400 placeholder:text-slate-400/60 dark:placeholder:text-zinc-600"
                 />
                 <button
                   onClick={handleRejectAction}
                   disabled={!feedbackValue.trim() || !isConnected}
-                  className="h-8 px-4 bg-red-500 hover:bg-red-600 disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-500 text-white text-xs font-semibold rounded transition-colors duration-150 cursor-pointer"
+                  className={`shrink-0 text-[11px] font-medium px-3 py-1 rounded-full transition-all duration-150 cursor-pointer ${
+                    feedbackValue.trim() && isConnected
+                      ? "text-rose-500 hover:text-rose-600"
+                      : "text-slate-400 dark:text-zinc-600"
+                  } disabled:text-slate-300 dark:disabled:text-zinc-700 disabled:cursor-not-allowed`}
                 >
-                  反馈修改
+                  反馈
                 </button>
               </div>
             </div>
