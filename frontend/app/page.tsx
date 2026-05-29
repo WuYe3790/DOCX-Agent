@@ -385,36 +385,30 @@ export default function Home() {
                         </motion.div>
 
                         {/* Expanded Detail Panel */}
-                        <AnimatePresence>
-                          {isExpanded && (
-                            <motion.div
-                              initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: -8, scale: 0.95, transition: { duration: 0.15 } }}
-                              transition={{ type: "spring", stiffness: 350, damping: 30 }}
-                              className="absolute top-full left-0 z-20 mt-1 w-80 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-md shadow-lg overflow-hidden"
-                            >
-                              <div className="p-3 space-y-2">
-                                {tool.toolArgs && (
-                                  <div>
-                                    <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
-                                    <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
-                                      {tool.toolArgs}
-                                    </pre>
-                                  </div>
-                                )}
-                                {tool.toolResult && (
-                                  <div>
-                                    <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
-                                    <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto">
-                                      {tool.toolResult}
-                                    </pre>
-                                  </div>
-                                )}
+                        <div
+                          className={`absolute top-full left-0 z-20 mt-1 w-80 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-md shadow-lg overflow-hidden transition-all duration-300 ease-out ${
+                            isExpanded ? "opacity-100 visible" : "opacity-0 invisible"
+                          }`}
+                        >
+                          <div className="p-3 space-y-2">
+                            {tool.toolArgs && (
+                              <div>
+                                <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">参数</p>
+                                <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
+                                  {tool.toolArgs}
+                                </pre>
                               </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                            )}
+                            {tool.toolResult && (
+                              <div>
+                                <p className="text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">执行结果</p>
+                                <pre className="text-[10px] font-mono bg-slate-100 dark:bg-zinc-900 p-2 rounded-lg text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-28 overflow-y-auto">
+                                  {tool.toolResult}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </motion.div>
                     );
                   })}
