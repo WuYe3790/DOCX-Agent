@@ -26,6 +26,12 @@ def parse_markdown_draft(markdown_path: str) -> str:
         block_type = block["type"]
         type_counts[block_type] = type_counts.get(block_type, 0) + 1
 
+    # 过滤掉每个 block 的冗余字段，保留必要信息
+    blocks_filtered = [
+        {k: v for k, v in block.items() if k != "raw"}
+        for block in blocks
+    ]
+
     return json_result(
         {
             "status": "ok",
@@ -41,39 +47,11 @@ def parse_markdown_draft(markdown_path: str) -> str:
                     "type": block["type"],
                     "line_start": block["line_start"],
                     "line_end": block["line_end"],
-                    "raw": block["raw"],
                     "support": block.get("support", "rejected"),
                 }
                 for block in unsupported
             ],
-            "blocks": blocks,
-            "layout_ir_preview": [
-                {
-                    "block_id": block["block_id"],
-                    "block_type": block["type"],
-                    "line_start": block["line_start"],
-                    "line_end": block["line_end"],
-                    "runs": _preview_runs(block),
-                    "table": _preview_table(block),
-                    "indent": _preview_indent(block),
-                    "support": block.get("support", "native"),
-                    "diagnostics": [
-                        diagnostic.to_dict()
-                        for diagnostic in diagnostics
-                        if diagnostic.block_id == block["block_id"]
-                    ],
-                }
-                for block in blocks
-            ],
-            "style_mapping_hint": {
-                "heading1": "章节标题样本，如 S002",
-                "heading2": "子标题样本，如 S004",
-                "paragraph": "正文样本，如 S001",
-                "list_item": "正文样本，如 S001",
-                "table_cell": "表格内普通文本样本；未提供时使用 paragraph",
-                "code_block": "代码块样本；未提供时使用 paragraph",
-                "formula": "公式文本 fallback 样本；未提供时使用 paragraph",
-            },
+            "blocks": blocks_filtered,
         }
     )
 
