@@ -386,7 +386,7 @@ async def ws_agent(websocket: WebSocket):
                 "round": round_index,
                 "workflow_state": workflow_state,
                 "allowed_tools": list(current_tool_names),
-                "token_count": msg_mgr.total_input_tokens,
+                "token_count": msg_mgr.last_prompt_tokens,
             })
             
             # Log model request

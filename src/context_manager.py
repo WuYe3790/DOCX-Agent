@@ -18,6 +18,7 @@ class MessageManager:
         self._token_threshold = token_threshold
         self._entries: list[dict] = []          # 按时间顺序追加的消息片段
         self._total_input_tokens: int = 0
+        self._last_prompt_tokens: int = 0       # 最近一次请求的 prompt token 数
 
     # ─── 消息操作 ────────────────────────────────────────
 
@@ -148,10 +149,12 @@ class MessageManager:
         return None
 
     def update_token_count(self, usage):
-        """从 LLM 响应 usage 中更新累计 input token 数"""
+        """从 LLM 响应 usage 中更新 token 计数"""
         if usage is None:
             return
-        self._total_input_tokens += getattr(usage, "prompt_tokens", 0) or 0
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        self._total_input_tokens += prompt_tokens
+        self._last_prompt_tokens = prompt_tokens
 
     def should_compress(self) -> bool:
         """累计 input token 超过阈值时返回 True"""
@@ -166,6 +169,11 @@ class MessageManager:
     @property
     def total_input_tokens(self) -> int:
         return self._total_input_tokens
+
+    @property
+    def last_prompt_tokens(self) -> int:
+        """最近一次请求的 prompt token 数，用于前端实际显示"""
+        return self._last_prompt_tokens
 
     def debug_info(self) -> dict:
         return {
