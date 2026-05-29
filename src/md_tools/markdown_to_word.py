@@ -71,14 +71,12 @@ def markdown_to_word(
                 }
             )
             if parsed.get("status") != "ok":
+                error_msg = parsed.get("result", {}).get("message") or parsed.get("message") or ""
                 return json_result(
                     {
                         "status": "error",
-                        "message": f"action {index} failed",
+                        "message": f"action {index} failed: {error_msg}",
                         "failed_action": action,
-                        "diagnostics": diagnostics,
-                        "support_summary": support_summary,
-                        "actions": action_results,
                         "action_guide": ACTION_GUIDE,
                     }
                 )
