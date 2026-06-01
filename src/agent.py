@@ -268,8 +268,13 @@ class Agent:
                     if delta is None:
                         continue
 
-                    # Reasoning (DeepSeek thinking / SenseNova reasoning_effort)
+                    # Reasoning（多厂商兼容）：
+                    # - DeepSeek: delta.reasoning_content（标准）
+                    # - SenseNova: delta.model_extra['reasoning']（专有扩展）
                     rc = getattr(delta, "reasoning_content", None)
+                    if not rc:
+                        model_extra = getattr(delta, "model_extra", None) or {}
+                        rc = model_extra.get("reasoning") if isinstance(model_extra, dict) else None
                     if rc:
                         accumulated_reasoning += rc
                         yield {"type": "reasoning", "delta": rc}
