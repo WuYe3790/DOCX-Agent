@@ -1,6 +1,11 @@
 import json
 from pathlib import Path
 
+try:
+    from docx_tools.style_profile import derive_style_mapping_from_bindings
+except ModuleNotFoundError:
+    from src.docx_tools.style_profile import derive_style_mapping_from_bindings
+
 from .apply_markdown_ir_after_paragraph import apply_markdown_ir_to_paragraph
 from .apply_markdown_ir_to_table_cell import apply_markdown_ir_to_table_cell
 from .common import json_result
@@ -31,6 +36,8 @@ def markdown_to_word(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_paths = _temp_paths(output, len(actions))
+    if style_profile_path and not style_mapping:
+        style_mapping = derive_style_mapping_from_bindings(style_profile_path)
     current_input = docx_path
     action_results = []
     diagnostics = []
@@ -289,7 +296,7 @@ tools_schema = {
                 "style_profile_path": {"type": "string", "description": "默认样式画像 JSON 路径；action 可覆盖"},
                 "style_mapping": {
                     "type": "object",
-                    "description": "默认 Markdown block 类型到 sample_id 的映射，例如 paragraph/list_item -> S001",
+                    "description": "默认 Markdown block 类型到 sample_id 的映射，例如 paragraph/list_item -> S001。若省略且提供了 style_profile_path，工具会从 profile 的 role_bindings 自动推导。",
                     "additionalProperties": {"type": "string"},
                 },
                 "actions": {
