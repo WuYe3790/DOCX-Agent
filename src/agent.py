@@ -102,7 +102,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 2. 请优先调用 analyze_docx_style_samples；若文档路径不明确，可用 ls 查看目录找到 docx 文件后调用 read_docx_structure。ls 仅用于定位文档路径，严禁浏览与文档无关的其他目录。
 3. 此阶段唯一目标是提取 docx 自身的样式和结构信息。如果用户请求中提到了与 docx 不相关的其他文件或目录（如代码、截图、图片等），在本阶段完全忽略它们。你当前阶段的唯一有效输出是样式分析结果，其他意图均无法执行。
 4. 拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id 与文档结构概述，并提示用户核对。
-5. 在用户确认样式之前，你必须调用 bind_styles_to_roles（可先传 auto_propose=True 让工具根据候选角色提示自动建议）生成 6 个标准角色（title / section_heading / body / table_label / table_value / placeholder）到 sample_id 的映射，并把 role_bindings 列表展示给用户确认。
+5. 在用户确认样式之前，你必须调用 bind_styles_to_roles（可先传 auto_propose=True 让工具根据候选角色提示自动建议）生成 5 个标准角色（title / section_heading / body / table_cell / placeholder）到 sample_id 的映射，并把 role_bindings 列表展示给用户确认。
 6. 列出样式建议和结构概述后，你必须立刻停止回答并等待用户确认！不要继续查看其他目录或文件，不要谈及草稿生成或下一阶段工作。
 """.strip()
     elif state == MD_DRAFT:
@@ -336,7 +336,7 @@ class Agent:
                     correction_msg = (
                         "请先调用 analyze_docx_style_samples 分析样式，"
                         "再调用 bind_styles_to_roles（可 auto_propose=True）"
-                        "生成 6 个标准角色映射，最后再让用户审核。"
+                        "生成 5 个标准角色映射，最后再让用户审核。"
                     )
                     self.msg_mgr.append_user(correction_msg)
                     self._append_log("阶段校验失败", {"reason": "未完成样式分析与角色绑定", "correction": correction_msg})

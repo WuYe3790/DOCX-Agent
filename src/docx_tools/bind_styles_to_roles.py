@@ -105,8 +105,8 @@ tools_schema = {
     "function": {
         "name": "bind_styles_to_roles",
         "description": (
-            "把 sample_id 绑定到 6 个标准角色（title / section_heading / body / "
-            "table_label / table_value / placeholder），写入样式画像 JSON 的 role_bindings 字段。"
+            "把 sample_id 绑定到 5 个标准角色（title / section_heading / body / "
+            "table_cell / placeholder），写入样式画像 JSON 的 role_bindings 字段。"
             "markdown_to_word 收到 style_profile_path 但未传 style_mapping 时，会从该字段自动推导格式映射。"
             "auto_propose=True 时根据候选角色提示自动建议，可再用显式 bindings 覆盖。"
         ),

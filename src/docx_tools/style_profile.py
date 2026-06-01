@@ -1,19 +1,17 @@
 import json
-from collections import Counter
 from pathlib import Path
 
 
-FIXED_ROLES = ("title", "section_heading", "body", "table_label", "table_value", "placeholder")
+FIXED_ROLES = ("title", "section_heading", "body", "table_cell", "placeholder")
 
 ROLE_TO_BLOCK_TYPES: dict[str, tuple[str, ...]] = {
     "title": ("heading1",),
     "section_heading": ("heading2", "heading3"),
     "body": ("paragraph", "list_item", "code_block", "formula_block", "image"),
-    "table_label": ("table_cell",),
-    "table_value": ("table_cell",),
+    "table_cell": ("table_cell",),
 }
 
-_DERIVATION_ORDER = ("body", "section_heading", "title", "table_label", "table_value")
+_DERIVATION_ORDER = ("body", "section_heading", "title", "table_cell")
 
 
 def load_style_sample(style_profile_path: str, sample_id: str) -> dict:
@@ -25,7 +23,7 @@ def load_style_sample(style_profile_path: str, sample_id: str) -> dict:
 
 
 def propose_role_bindings(profile: dict) -> tuple[dict[str, str], list[str]]:
-    """按 (context, top candidate_role_hint) 启发式分配 6 个标准角色。
+    """按 (context, top candidate_role_hint) 启发式分配 5 个标准角色。
 
     返回 (proposed_bindings, warnings)。proposed_bindings 中只包含能匹配上的角色；
     无法判定的角色会被跳过并加 warning 提醒调用方补全。
@@ -53,10 +51,11 @@ def propose_role_bindings(profile: dict) -> tuple[dict[str, str], list[str]]:
                 candidates["body"].append((occurrences, sample_id))
         if top_hint == "blue_placeholder_or_prompt":
             candidates["placeholder"].append((occurrences, sample_id))
-        if context == "table_cell_first_column" and top_hint == "table_label_cell":
-            candidates["table_label"].append((occurrences, sample_id))
-        if context == "table_cell_other_column" and top_hint == "table_value_cell":
-            candidates["table_value"].append((occurrences, sample_id))
+        if context in ("table_cell_first_column", "table_cell_other_column") and top_hint in (
+            "table_label_cell",
+            "table_value_cell",
+        ):
+            candidates["table_cell"].append((occurrences, sample_id))
 
     proposed: dict[str, str] = {}
     warnings: list[str] = []
@@ -66,19 +65,6 @@ def propose_role_bindings(profile: dict) -> tuple[dict[str, str], list[str]]:
             warnings.append(f"role '{role}' 没有可匹配的样本，需要手动绑定。")
             continue
         proposed[role] = cands[0][1]
-
-    used = Counter(proposed.values())
-    conflicts = [sample_id for sample_id, count in used.items() if count > 1]
-    for sample_id in conflicts:
-        offenders = [role for role, sid in proposed.items() if sid == sample_id]
-        frequencies = {role: candidates[role][0][0] for role in offenders if candidates[role]}
-        keep = max(offenders, key=lambda role: frequencies.get(role, -1))
-        for role in offenders:
-            if role != keep:
-                del proposed[role]
-                warnings.append(
-                    f"role '{role}' 与 '{keep}' 同时自动建议到 {sample_id}，已丢弃 '{role}'。"
-                )
 
     return proposed, warnings
 
