@@ -3,15 +3,14 @@ from collections import Counter
 from pathlib import Path
 
 from .common import json_result
-from .style_profile import FIXED_ROLES, propose_role_bindings
+from .style_profile import FIXED_ROLES
 
 
 def bind_styles_to_roles(
     style_profile_path: str,
-    bindings: dict[str, str] | None = None,
-    auto_propose: bool = False,
+    bindings: dict[str, str],
 ) -> str:
-    """把 sample_id 绑定到 6 个标准角色，写入 style_profile.json 的 role_bindings 字段。"""
+    """把 sample_id 显式绑定到 5 个标准角色，写入 style_profile.json 的 role_bindings 字段。"""
     profile_path = Path(style_profile_path)
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -29,12 +28,19 @@ def bind_styles_to_roles(
         {sample.get("sample_id") for sample in samples if sample.get("sample_id")}
     )
 
-    warnings: list[str] = []
-    if auto_propose and not bindings:
-        bindings, warnings = propose_role_bindings(profile)
-    elif auto_propose and bindings:
-        warnings.append("auto_propose=True 时已同时传入 bindings，忽略 auto_propose，仅校验 bindings。")
-    bindings = bindings or {}
+    if not bindings:
+        return json_result(
+            {
+                "status": "error",
+                "message": (
+                    "必须显式提供 bindings。请读取样式画像里的 style_samples 数组，"
+                    "为 5 个标准角色各选一个最匹配的 sample_id。"
+                ),
+                "available_sample_ids": available_sample_ids,
+                "fixed_roles": list(FIXED_ROLES),
+                "style_profile_path": str(profile_path),
+            }
+        )
 
     invalid_roles = sorted(set(bindings) - set(FIXED_ROLES))
     if invalid_roles:
@@ -95,7 +101,6 @@ def bind_styles_to_roles(
             "role_bindings": dict(bindings),
             "available_sample_ids": available_sample_ids,
             "fixed_roles": list(FIXED_ROLES),
-            "warnings": warnings,
         }
     )
 
@@ -105,10 +110,12 @@ tools_schema = {
     "function": {
         "name": "bind_styles_to_roles",
         "description": (
-            "把 sample_id 绑定到 5 个标准角色（title / section_heading / body / "
+            "把 sample_id 显式绑定到 5 个标准角色（title / section_heading / body / "
             "table_cell / placeholder），写入样式画像 JSON 的 role_bindings 字段。"
+            "你必须先读取 style_samples 数组，根据每个 sample 的 format/paragraph_format/"
+            "context 字段为 5 个标准角色各选一个最匹配的 sample_id，"
+            "通过 bindings 参数显式传入。"
             "markdown_to_word 收到 style_profile_path 但未传 style_mapping 时，会从该字段自动推导格式映射。"
-            "auto_propose=True 时根据候选角色提示自动建议，可再用显式 bindings 覆盖。"
         ),
         "parameters": {
             "type": "object",
@@ -119,16 +126,15 @@ tools_schema = {
                 },
                 "bindings": {
                     "type": "object",
-                    "description": "标准角色到 sample_id 的映射，例如 {\"title\": \"S001\", \"body\": \"S003\"}",
+                    "description": (
+                        "标准角色到 sample_id 的显式映射，必须从 style_samples 里选。"
+                        "例如 {\"title\": \"S001\", \"section_heading\": \"S002\", "
+                        "\"body\": \"S003\", \"table_cell\": \"S004\", \"placeholder\": \"S005\"}"
+                    ),
                     "additionalProperties": {"type": "string"},
                 },
-                "auto_propose": {
-                    "type": "boolean",
-                    "description": "为 True 时使用启发式自动建议；可与 bindings 配合先用 auto_propose 再覆盖",
-                    "default": False,
-                },
             },
-            "required": ["style_profile_path"],
+            "required": ["style_profile_path", "bindings"],
         },
     },
 }
