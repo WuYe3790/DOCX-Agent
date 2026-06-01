@@ -101,8 +101,23 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start":
-          // 不清空 streams — 让 live area 累积显示所有轮次的 reasoning + content
-          // (用户要的: "每次的思考流和中间的一些正文打出来不被覆盖")
+          // 兜底: 如果前一轮的 streams 没被 tool_start 结算 (例如上一轮没调工具直接结束),
+          // 在这里清空前先 commit
+          setMessages((prev) => {
+            if (reasoningStream || contentStream) {
+              return [
+                ...prev,
+                {
+                  role: "assistant",
+                  content: contentStream || undefined,
+                  reasoning_content: reasoningStream || undefined,
+                },
+              ];
+            }
+            return prev;
+          });
+          setReasoningStream("");
+          setContentStream("");
           setIsGenerating(true);
           setThinkingStartTime(Date.now());
           if (data.token_count !== undefined) {
@@ -122,16 +137,29 @@ export default function Home() {
           break;
 
         case "tool_start":
-          setMessages((prev) => [
-            ...prev,
-            {
+          // 关键: 在推入工具消息之前, 先把"刚刚想清楚的内容"结算
+          // 这样思考→工具的顺序正确, 且前面的思考不会被擦掉
+          setMessages((prev) => {
+            const newMessages = [...prev];
+            if (reasoningStream || contentStream) {
+              newMessages.push({
+                role: "assistant",
+                content: contentStream || undefined,
+                reasoning_content: reasoningStream || undefined,
+              });
+            }
+            newMessages.push({
               role: "tool",
               toolName: data.name,
               toolArgs: data.arguments,
               toolStatus: "running",
               id: data.name + "_" + crypto.randomUUID(),
-            },
-          ]);
+            });
+            return newMessages;
+          });
+          // 结算后立即清空, 为后续输出腾出空间
+          setReasoningStream("");
+          setContentStream("");
           break;
 
         case "tool_end":
