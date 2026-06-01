@@ -129,7 +129,7 @@ export default function Home() {
               toolName: data.name,
               toolArgs: data.arguments,
               toolStatus: "running",
-              id: data.name + "_" + Date.now(),
+              id: data.name + "_" + crypto.randomUUID(),
             },
           ]);
           break;
