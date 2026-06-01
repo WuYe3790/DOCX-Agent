@@ -13,9 +13,17 @@ import asyncio
 import json
 from typing import Optional
 
+from openai import APITimeoutError, APIConnectionError, BadRequestError
+
 from llm_adapter import LLMClientAdapter
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 from context_manager import MessageManager
+
+
+# 流式调用可重试的异常（pre-stream 阶段）
+_RETRYABLE_EXC = (APITimeoutError, APIConnectionError)
+_MAX_RETRIES = 2
+_RETRY_DELAYS = [1.0, 2.0]  # 两次重试的退避秒数
 
 
 def create_log_file():
@@ -212,37 +220,100 @@ class Agent:
                 "tool_names": sorted(list(current_tool_names)),
             })
 
-            try:
-                response = self.llm.create_chat_completion(
-                    messages=request_messages,
-                    tools=current_tool_schemas,
-                    stream=False
-                )
-            except Exception as e:
-                self._append_log("模型调用失败", {"error": str(e)})
-                yield {"type": "error", "message": f"调用大模型失败: {str(e)}"}
-                return
+            # --- 0. Pre-stream retry wrapper ---
+            stream = None
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    stream = self.llm.create_chat_completion(
+                        messages=request_messages,
+                        tools=current_tool_schemas,
+                        stream=True,
+                    )
+                    break
+                except _RETRYABLE_EXC as e:
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_DELAYS[attempt]
+                        self._append_log("流式重试", {"attempt": attempt + 1, "error": str(e), "delay": delay})
+                        yield {"type": "retrying", "attempt": attempt + 1, "delay": delay, "error": str(e)}
+                        await asyncio.sleep(delay)
+                        continue
+                    self._append_log("流式重试耗尽", {"error": str(e), "total_attempts": attempt + 1})
+                    yield {"type": "error", "message": f"调用大模型失败（重试 {attempt + 1} 次后）: {e}"}
+                    return
+                except Exception as e:
+                    self._append_log("模型调用失败", {"error": str(e)})
+                    yield {"type": "error", "message": f"调用大模型失败: {str(e)}"}
+                    return
 
-            tool_calls_map = {}
+            # --- 1. Iterate streaming chunks, accumulate + yield deltas ---
+            tool_calls_map: dict = {}
             accumulated_content = ""
             accumulated_reasoning = ""
+            finish_reason = None
+            usage = None
+            stream_error: Exception | None = None
 
-            if response.choices:
-                message = response.choices[0].message
-                if message:
-                    accumulated_reasoning = getattr(message, "reasoning_content", "") or ""
-                    accumulated_content = getattr(message, "content", "") or ""
-                    tool_calls = getattr(message, "tool_calls", None)
-                    if tool_calls:
-                        for tc in tool_calls:
+            try:
+                for chunk in stream:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage:
+                        usage = chunk_usage
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    fr = getattr(choice, "finish_reason", None)
+                    if fr:
+                        finish_reason = fr
+                    delta = getattr(choice, "delta", None)
+                    if delta is None:
+                        continue
+
+                    # Reasoning (DeepSeek thinking / SenseNova reasoning_effort)
+                    rc = getattr(delta, "reasoning_content", None)
+                    if rc:
+                        accumulated_reasoning += rc
+                        yield {"type": "reasoning", "delta": rc}
+
+                    # Content
+                    c = getattr(delta, "content", None)
+                    if c:
+                        accumulated_content += c
+                        yield {"type": "content", "delta": c}
+
+                    # Tool calls（跨 chunk 累积 arguments）
+                    tcs = getattr(delta, "tool_calls", None)
+                    if tcs:
+                        for tc in tcs:
                             idx = tc.index
-                            tool_calls_map[idx] = {
-                                "id": tc.id or "",
-                                "name": tc.function.name if tc.function else "",
-                                "arguments": tc.function.arguments if tc.function else ""
-                            }
+                            if idx not in tool_calls_map:
+                                tool_calls_map[idx] = {
+                                    "id": tc.id or "",
+                                    "name": (tc.function.name if tc.function else "") or "",
+                                    "arguments": (tc.function.arguments if tc.function else "") or "",
+                                }
+                            else:
+                                if tc.function:
+                                    if tc.function.name:
+                                        tool_calls_map[idx]["name"] += tc.function.name
+                                    if tc.function.arguments:
+                                        tool_calls_map[idx]["arguments"] += tc.function.arguments
+                                if tc.id:
+                                    tool_calls_map[idx]["id"] = tc.id
+            except Exception as e:
+                stream_error = e
 
-            log_msg = {"role": "assistant"}
+            # --- 2. Mid-stream failure: discard partial, abort ---
+            if stream_error is not None:
+                self._append_log("模型流中断", {
+                    "error": str(stream_error),
+                    "partial_content_len": len(accumulated_content),
+                    "partial_reasoning_len": len(accumulated_reasoning),
+                })
+                yield {"type": "error", "message": f"流式调用中断: {stream_error}"}
+                return
+
+            # --- 3. Log assembled response ---
+            log_msg = {"role": "assistant", "finish_reason": finish_reason}
             if tool_calls_map:
                 log_msg["tool_calls"] = [
                     {"id": v["id"], "type": "function", "function": {"name": v["name"], "arguments": v["arguments"]}}
@@ -254,7 +325,7 @@ class Agent:
                 log_msg["reasoning_content"] = accumulated_reasoning
             self._append_log(f"第 {self._round_index} 轮模型响应", log_msg)
 
-            usage = getattr(response, "usage", None)
+            # --- 4. Token tracking ---
             self.msg_mgr.update_token_count(usage)
             if usage:
                 self._append_log(f"第 {self._round_index} 轮 token", {
