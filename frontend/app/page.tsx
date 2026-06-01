@@ -101,6 +101,21 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start":
+          // 关键: 把上一轮流式累积的内容 commit 到 messages
+          // (否则多轮工具调用场景下 round 1..N-1 的内容被静默清空)
+          setMessages((prev) => {
+            if (reasoningStream || contentStream) {
+              return [
+                ...prev,
+                {
+                  role: "assistant",
+                  content: contentStream || undefined,
+                  reasoning_content: reasoningStream || undefined,
+                },
+              ];
+            }
+            return prev;
+          });
           setReasoningStream("");
           setContentStream("");
           setIsGenerating(true);
