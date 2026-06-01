@@ -101,23 +101,8 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start":
-          // 关键: 把上一轮流式累积的内容 commit 到 messages
-          // (否则多轮工具调用场景下 round 1..N-1 的内容被静默清空)
-          setMessages((prev) => {
-            if (reasoningStream || contentStream) {
-              return [
-                ...prev,
-                {
-                  role: "assistant",
-                  content: contentStream || undefined,
-                  reasoning_content: reasoningStream || undefined,
-                },
-              ];
-            }
-            return prev;
-          });
-          setReasoningStream("");
-          setContentStream("");
+          // 不清空 streams — 让 live area 累积显示所有轮次的 reasoning + content
+          // (用户要的: "每次的思考流和中间的一些正文打出来不被覆盖")
           setIsGenerating(true);
           setThinkingStartTime(Date.now());
           if (data.token_count !== undefined) {
