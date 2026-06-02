@@ -24,9 +24,8 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reasoningStream, setReasoningStream] = useState<string>("");
   const [contentStream, setContentStream] = useState<string>("");
-  // 关键: 用 ref 跟踪最新值, 因为 socket.onmessage 闭包只捕获 session 启动时的值
-  const reasoningStreamRef = useRef("");
-  const contentStreamRef = useRef("");
+  // 注意: 不要用 useRef + useEffect 同步 ref — useEffect 永远赶不上同一批
+  // 处理内的 setMessages 回调。改用函数式 setState 捕获最新 prev (见 tool_start/round_start handler)
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isWaitingApproval, setIsWaitingApproval] = useState<boolean>(false);
   const [approvalPhase, setApprovalPhase] = useState<"style_review" | "md_draft" | "word_editing" | null>(null);
@@ -47,10 +46,6 @@ export default function Home() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, contentStream, reasoningStream, isWaitingApproval]);
-
-  // 关键: 同步 ref 与 state, 让 socket.onmessage 闭包外的回调能读到最新值
-  useEffect(() => { reasoningStreamRef.current = reasoningStream; }, [reasoningStream]);
-  useEffect(() => { contentStreamRef.current = contentStream; }, [contentStream]);
 
   const resetWorkspace = () => {
     setMessages([]);
@@ -108,16 +103,19 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start":
-          // 兜底: 如果前一轮的 streams 没被 tool_start 结算 (例如上一轮没调工具直接结束),
-          // 在这里清空前先 commit. 用 ref 读最新值 (闭包会过期)
+          // 兜底: 如果前一轮的 streams 没被 tool_start 结算, 在这里清空前先 commit
+          // 关键: 用函数式 setState 捕获最新 prev (闭包/Ref 都不够)
+          let rsRound = "", csRound = "";
+          setReasoningStream((prev) => { rsRound = prev; return prev; });
+          setContentStream((prev) => { csRound = prev; return prev; });
           setMessages((prev) => {
-            if (reasoningStreamRef.current || contentStreamRef.current) {
+            if (rsRound || csRound) {
               return [
                 ...prev,
                 {
                   role: "assistant",
-                  content: contentStreamRef.current || undefined,
-                  reasoning_content: reasoningStreamRef.current || undefined,
+                  content: csRound || undefined,
+                  reasoning_content: rsRound || undefined,
                 },
               ];
             }
@@ -145,15 +143,17 @@ export default function Home() {
 
         case "tool_start":
           // 关键: 在推入工具消息之前, 先把"刚刚想清楚的内容"结算
-          // 这样思考→工具的顺序正确, 且前面的思考不会被擦掉.
-          // 用 ref 读最新值, 不要用闭包 (闭包在 socket.onmessage 一次性赋值后会过期)
+          // 关键: 用函数式 setState 捕获最新 prev, 不要用 ref (useEffect 永远赶不上同一批)
+          let rsTool = "", csTool = "";
+          setReasoningStream((prev) => { rsTool = prev; return prev; });
+          setContentStream((prev) => { csTool = prev; return prev; });
           setMessages((prev) => {
             const newMessages = [...prev];
-            if (reasoningStreamRef.current || contentStreamRef.current) {
+            if (rsTool || csTool) {
               newMessages.push({
                 role: "assistant",
-                content: contentStreamRef.current || undefined,
-                reasoning_content: reasoningStreamRef.current || undefined,
+                content: csTool || undefined,
+                reasoning_content: rsTool || undefined,
               });
             }
             newMessages.push({
