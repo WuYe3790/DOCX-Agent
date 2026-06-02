@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, User } from "lucide-react";
+import { Terminal, Send, CheckCircle2, RefreshCw, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
@@ -20,86 +20,124 @@ interface TokenInfo {
   token_count: number;
 }
 
-// === 统一深度思考 UI 组件 (历史 + 实时共用) ===
-function ReasoningPanel({
-  content,
-  isLive,
-  startTime
-}: {
-  content: string;
-  isLive: boolean;
-  startTime?: number | null;
-}) {
-  const [isExpanded, setIsExpanded] = useState(!isLive);
-
+// === 简化版 ReasoningPanel: 只渲染已定型历史 ===
+function ReasoningPanel({ content }: { content: string }) {
   if (!content) return null;
-
   return (
     <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
-      >
-        <span>
-          {isExpanded
-            ? "收起思考过程"
-            : isLive
-              ? `已思考 ${startTime ? Math.round((Date.now() - startTime) / 1000) : 0} 秒`
-              : "已完成思考"
-          }
-        </span>
-        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-      </button>
-      {isExpanded && (
-        <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
-          {content}
-        </div>
-      )}
+      <div className="px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider select-none">
+        已完成思考
+      </div>
+      <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+        {content}
+      </div>
     </div>
   );
 }
 
+// === LiveAgentContainer: React.memo + () => true 物理隔离 ===
+// 关键: () => true 让 React 永远认为 props 没变, 永不触发 re-render
+// 内部 DOM 完全由原生 JS 掌控, 不会被 React 协调机制抹除
+const LiveAgentContainer = React.memo(
+  () => {
+    return (
+      <div id="live-agent-container" style={{ display: "none" }} className="mb-8">
+        {/* 实时思考框 */}
+        <div
+          id="live-reasoning-box"
+          style={{ display: "none" }}
+          className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
+        >
+          <div className="text-[10px] text-indigo-400 dark:text-indigo-500 uppercase tracking-wider mb-1 font-semibold select-none">
+            正在思考 <span id="live-time-text">0</span> 秒
+          </div>
+          <span
+            id="live-reasoning-text"
+            className="text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed"
+          ></span>
+        </div>
+        {/* 实时正文框 */}
+        <div
+          id="live-content-box"
+          style={{ display: "none" }}
+          className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text"
+        >
+          <span id="live-content-text"></span>
+        </div>
+      </div>
+    );
+  },
+  () => true  // 👈 永远返回 true, 阻断 React 重绘
+);
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [reasoningStream, setReasoningStream] = useState<string>("");
-  const [contentStream, setContentStream] = useState<string>("");
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isWaitingApproval, setIsWaitingApproval] = useState<boolean>(false);
   const [approvalPhase, setApprovalPhase] = useState<"style_review" | "md_draft" | "word_editing" | null>(null);
   const [docxPath, setDocxPath] = useState<string>("");
   const [inputValue, setInputValue] = useState<string>("");
   const [feedbackValue, setFeedbackValue] = useState<string>("");
-  const [isThinkingExpanded, setIsThinkingExpanded] = useState(true);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  const [thinkingStartTime, setThinkingStartTime] = useState<number | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // === 关键: ref 是真值, setState 只是触发重渲染 ===
-  // 同一批处理内, ref.current 永远是最新值
-  const reasoningRef = useRef<string>("");
-  const contentRef = useRef<string>("");
+  // === 原生 DOM 工具函数 ===
+  const flushLiveStreamToMessages = () => {
+    const rText = document.getElementById("live-reasoning-text");
+    const cText = document.getElementById("live-content-text");
+    const txtR = rText?.textContent || "";
+    const txtC = cText?.textContent || "";
+    if (txtR || txtC) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant" as const,
+          content: txtC || undefined,
+          reasoning_content: txtR || undefined,
+        },
+      ]);
+    }
+  };
+
+  const clearLiveStreamContainer = () => {
+    // 清理计时器
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    // 重置 DOM
+    const rText = document.getElementById("live-reasoning-text");
+    const cText = document.getElementById("live-content-text");
+    const rBox = document.getElementById("live-reasoning-box");
+    const cBox = document.getElementById("live-content-box");
+    const container = document.getElementById("live-agent-container");
+    const timeEl = document.getElementById("live-time-text");
+    if (rText) rText.textContent = "";
+    if (cText) cText.textContent = "";
+    if (timeEl) timeEl.textContent = "0";
+    if (rBox) rBox.style.display = "none";
+    if (cBox) cBox.style.display = "none";
+    if (container) container.style.display = "none";
+  };
 
   // Auto-scroll chat window
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, contentStream, reasoningStream, isWaitingApproval]);
+  }, [messages, isWaitingApproval]);
 
   const resetWorkspace = () => {
     setMessages([]);
-    setReasoningStream("");
-    setContentStream("");
-    reasoningRef.current = "";
-    contentRef.current = "";
+    clearLiveStreamContainer();
     setDocxPath("");
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     setIsGenerating(false);
-    setThinkingStartTime(null);
     setExpandedTools(new Set());
     setSelectedToolId(null);
     setInputValue("");
@@ -107,18 +145,6 @@ export default function Home() {
     if (wsRef.current) {
       wsRef.current.close();
     }
-  };
-
-  const toggleToolExpanded = (id: string) => {
-    setExpandedTools((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
-    });
   };
 
   const startAgentSession = (initialPrompt: string, path: string) => {
@@ -146,76 +172,78 @@ export default function Home() {
       const data = JSON.parse(event.data);
 
       switch (data.type) {
-        case "round_start":
-          // 兜底: 如果前一轮的 streams 没被 tool_start 结算, 在这里清空前先 commit
-          // 关键: 用 ref.current 读最新值 (ref 在同一批处理内永远最新, 不受 useEffect 延迟影响)
-          setMessages((prev) => {
-            if (reasoningRef.current || contentRef.current) {
-              return [
-                ...prev,
-                {
-                  role: "assistant",
-                  content: contentRef.current || undefined,
-                  reasoning_content: reasoningRef.current || undefined,
-                },
-              ];
-            }
-            return prev;
-          });
-          reasoningRef.current = "";
-          contentRef.current = "";
-          setReasoningStream("");
-          setContentStream("");
+        case "round_start": {
+          // === 启动原生秒数计时器 ===
+          if (timerRef.current) clearInterval(timerRef.current);
+          const startTime = Date.now();
+          const timeEl = document.getElementById("live-time-text");
+          if (timeEl) timeEl.textContent = "0";
+          timerRef.current = setInterval(() => {
+            const el = document.getElementById("live-time-text");
+            if (el) el.textContent = String(Math.round((Date.now() - startTime) / 1000));
+          }, 1000);
+
+          // === 显示容器, 重置内部文本 ===
+          const container = document.getElementById("live-agent-container");
+          if (container) container.style.display = "block";
+          const rBox = document.getElementById("live-reasoning-box");
+          const cBox = document.getElementById("live-content-box");
+          if (rBox) rBox.style.display = "none";
+          if (cBox) cBox.style.display = "none";
+          const rText = document.getElementById("live-reasoning-text");
+          const cText = document.getElementById("live-content-text");
+          if (rText) rText.textContent = "";
+          if (cText) cText.textContent = "";
+
           setIsGenerating(true);
-          setThinkingStartTime(Date.now());
           if (data.token_count !== undefined) {
             setTokenCount(data.token_count);
           }
           break;
+        }
 
         case "heartbeat":
           break;
 
-        case "reasoning":
-          // 关键: ref 先追加, setState 同步用 ref.current (避免 setState 异步导致丢数据)
-          reasoningRef.current += data.delta;
-          setReasoningStream(reasoningRef.current);
+        case "reasoning": {
+          // === 纯原生 DOM 累加: 绕过 React 批处理, 浏览器立即 paint ===
+          const el = document.getElementById("live-reasoning-text");
+          const box = document.getElementById("live-reasoning-box");
+          if (el && box) {
+            el.textContent += data.delta;
+            box.style.display = "block";
+          }
           break;
+        }
 
-        case "content":
-          contentRef.current += data.delta;
-          setContentStream(contentRef.current);
+        case "content": {
+          const el = document.getElementById("live-content-text");
+          const box = document.getElementById("live-content-box");
+          if (el && box) {
+            el.textContent += data.delta;
+            box.style.display = "block";
+          }
           break;
+        }
 
-        case "tool_start":
-          // 关键: 在推入工具消息之前, 先把"刚刚想清楚的内容"结算
-          // 用 ref.current 而非闭包 (闭包/socket.onmessage 一次性赋值后会过期)
-          setMessages((prev) => {
-            const newMessages = [...prev];
-            if (reasoningRef.current || contentRef.current) {
-              newMessages.push({
-                role: "assistant",
-                content: contentRef.current || undefined,
-                reasoning_content: reasoningRef.current || undefined,
-              });
-            }
-            newMessages.push({
+        case "tool_start": {
+          // === 结算: DOM 文本 -> messages, 然后清空 DOM ===
+          flushLiveStreamToMessages();
+          clearLiveStreamContainer();
+          setMessages((prev) => [
+            ...prev,
+            {
               role: "tool",
               toolName: data.name,
               toolArgs: data.arguments,
               toolStatus: "running",
               id: data.name + "_" + crypto.randomUUID(),
-            });
-            return newMessages;
-          });
-          // 结算后立即清空 ref 和 state
-          reasoningRef.current = "";
-          contentRef.current = "";
-          setReasoningStream("");
-          setContentStream("");
+            },
+          ]);
           break;
+        }
 
-        case "tool_end":
+        case "tool_end": {
           setMessages((prev) =>
             prev.map((msg) => {
               if (msg.role === "tool" && msg.toolName === data.name && msg.toolStatus === "running") {
@@ -229,43 +257,43 @@ export default function Home() {
             })
           );
           break;
+        }
 
-        case "wait_approval":
-          // 用 ref.current 读最新流值 (替代闭包捕获)
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: data.content,
-              reasoning_content: reasoningRef.current || undefined,
-            },
-          ]);
-          reasoningRef.current = "";
-          contentRef.current = "";
-          setReasoningStream("");
-          setContentStream("");
+        case "wait_approval": {
+          flushLiveStreamToMessages();
+          clearLiveStreamContainer();
+          if (data.content !== undefined) {
+            setMessages((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
+                return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
+              }
+              return prev;
+            });
+          }
           setApprovalPhase(data.phase);
           setIsWaitingApproval(true);
           setIsGenerating(false);
           break;
+        }
 
-        case "done":
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: data.content,
-              reasoning_content: reasoningRef.current || undefined,
-            },
-          ]);
-          reasoningRef.current = "";
-          contentRef.current = "";
-          setReasoningStream("");
-          setContentStream("");
+        case "done": {
+          flushLiveStreamToMessages();
+          clearLiveStreamContainer();
+          if (data.content !== undefined) {
+            setMessages((prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
+                return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
+              }
+              return prev;
+            });
+          }
           setIsWaitingApproval(false);
           setApprovalPhase(null);
           setIsGenerating(false);
           break;
+        }
 
         case "error":
           setIsGenerating(false);
@@ -279,6 +307,10 @@ export default function Home() {
       setIsWaitingApproval(false);
       setApprovalPhase(null);
       setIsGenerating(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
 
     socket.onerror = (err) => {
@@ -323,7 +355,6 @@ export default function Home() {
       })
     );
 
-    // Append user's action to messages list!
     const userActionText = approved
       ? "【确认同意】同意并进入下一阶段"
       : `【拒绝反馈】反馈修改建议：${feedback}`;
@@ -360,13 +391,11 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Connection Badge */}
           <div className="flex items-center gap-2">
             <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
             <span className="text-xs font-mono text-slate-500">{isConnected ? "已连接" : "已断开"}</span>
           </div>
 
-          {/* Token Usage Bar */}
           {tokenCount > 0 && (
             <div className="flex items-center gap-2">
               <div className="w-24 h-1.5 bg-slate-200 dark:bg-zinc-700 rounded-full overflow-hidden">
@@ -422,12 +451,9 @@ export default function Home() {
               </div>
             );
           } else if (msg.role === "tool") {
-            // Skip if already part of a group (consecutive tools merged earlier)
             if (index > 0 && messages[index - 1].role === "tool") {
               return null;
             }
-
-            // Collect all consecutive tool messages into a group
             const toolGroup: any[] = [];
             let j = index;
             while (j < messages.length && messages[j].role === "tool") {
@@ -454,7 +480,6 @@ export default function Home() {
                         exit={{ opacity: 0, transition: { duration: 0.1 } }}
                         transition={{ type: "spring", stiffness: 400, damping: 25 }}
                       >
-                        {/* Ghost Text Tool Name */}
                         <span
                           onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
                           className={`inline-flex items-center gap-1 font-mono text-[11px] cursor-pointer select-none ${
@@ -470,7 +495,6 @@ export default function Home() {
                           }</span>
                         </span>
 
-                        {/* Soft Detail Panel */}
                         {isExpanded && (
                           <div className="mt-2 w-full max-w-[600px] border border-slate-200/60 dark:border-zinc-800/60 bg-slate-50/80 dark:bg-zinc-900/50 backdrop-blur-sm rounded-md p-3 space-y-3 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                             {tool.toolArgs && (
@@ -498,11 +522,10 @@ export default function Home() {
               </motion.div>
             );
           } else {
-            // Assistant Message — 用 ReasoningPanel 统一历史和实时 UI
             return (
               <div key={index} className="mb-8 select-text">
                 {msg.reasoning_content && (
-                  <ReasoningPanel content={msg.reasoning_content} isLive={false} />
+                  <ReasoningPanel content={msg.reasoning_content} />
                 )}
                 {msg.content && (
                   <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
@@ -514,22 +537,11 @@ export default function Home() {
           }
         })}
 
-        {/* Real-time Streaming Response — 用 ReasoningPanel */}
-        {(reasoningStream || contentStream) && (
-          <div className="mb-8 select-text">
-            {reasoningStream && (
-              <ReasoningPanel content={reasoningStream} isLive={true} startTime={thinkingStartTime} />
-            )}
-            {contentStream && (
-              <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
-                <MarkdownRenderer content={contentStream} />
-              </div>
-            )}
-          </div>
-        )}
+        {/* === React.memo 物理隔离的原生流容器 === */}
+        <LiveAgentContainer />
 
         {/* Ghost-style Thinking Indicator */}
-        {isGenerating && !reasoningStream && !contentStream && (
+        {isGenerating && (
           <div className="flex items-center gap-3 mt-3 px-1">
             <div className="relative flex items-center justify-center w-5 h-5">
               <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
@@ -544,7 +556,6 @@ export default function Home() {
         {/* Inline Phase Checkpoint (Waiting Approval) */}
         {isWaitingApproval && (
           <div className="mb-8 space-y-3">
-            {/* Floating Hint Text - no container, pure typography */}
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400 dark:text-indigo-500 shrink-0" />
               <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
@@ -554,9 +565,7 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Elegant Inline Control Bar */}
             <div className="flex flex-row items-center gap-3">
-              {/* Approve Capsule */}
               <button
                 onClick={handleApproveAction}
                 disabled={!isConnected}
@@ -565,7 +574,6 @@ export default function Home() {
                 {isConnected ? "同意并进入下一阶段" : "已断开连接"}
               </button>
 
-              {/* Feedback Input Row */}
               <div className="flex-1 flex items-center gap-2 bg-slate-50/60 dark:bg-zinc-900/40 border border-slate-200/50 dark:border-zinc-700/50 rounded-full px-4 py-1.5">
                 <input
                   type="text"
