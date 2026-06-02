@@ -20,12 +20,49 @@ interface TokenInfo {
   token_count: number;
 }
 
+// === 统一深度思考 UI 组件 (历史 + 实时共用) ===
+function ReasoningPanel({
+  content,
+  isLive,
+  startTime
+}: {
+  content: string;
+  isLive: boolean;
+  startTime?: number | null;
+}) {
+  const [isExpanded, setIsExpanded] = useState(!isLive);
+
+  if (!content) return null;
+
+  return (
+    <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
+      >
+        <span>
+          {isExpanded
+            ? "收起思考过程"
+            : isLive
+              ? `已思考 ${startTime ? Math.round((Date.now() - startTime) / 1000) : 0} 秒`
+              : "已完成思考"
+          }
+        </span>
+        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+      </button>
+      {isExpanded && (
+        <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [reasoningStream, setReasoningStream] = useState<string>("");
   const [contentStream, setContentStream] = useState<string>("");
-  // 注意: 不要用 useRef + useEffect 同步 ref — useEffect 永远赶不上同一批
-  // 处理内的 setMessages 回调。改用函数式 setState 捕获最新 prev (见 tool_start/round_start handler)
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isWaitingApproval, setIsWaitingApproval] = useState<boolean>(false);
   const [approvalPhase, setApprovalPhase] = useState<"style_review" | "md_draft" | "word_editing" | null>(null);
@@ -42,6 +79,11 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // === 关键: ref 是真值, setState 只是触发重渲染 ===
+  // 同一批处理内, ref.current 永远是最新值
+  const reasoningRef = useRef<string>("");
+  const contentRef = useRef<string>("");
+
   // Auto-scroll chat window
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -51,6 +93,8 @@ export default function Home() {
     setMessages([]);
     setReasoningStream("");
     setContentStream("");
+    reasoningRef.current = "";
+    contentRef.current = "";
     setDocxPath("");
     setIsWaitingApproval(false);
     setApprovalPhase(null);
@@ -104,23 +148,22 @@ export default function Home() {
       switch (data.type) {
         case "round_start":
           // 兜底: 如果前一轮的 streams 没被 tool_start 结算, 在这里清空前先 commit
-          // 关键: 用函数式 setState 捕获最新 prev (闭包/Ref 都不够)
-          let rsRound = "", csRound = "";
-          setReasoningStream((prev) => { rsRound = prev; return prev; });
-          setContentStream((prev) => { csRound = prev; return prev; });
+          // 关键: 用 ref.current 读最新值 (ref 在同一批处理内永远最新, 不受 useEffect 延迟影响)
           setMessages((prev) => {
-            if (rsRound || csRound) {
+            if (reasoningRef.current || contentRef.current) {
               return [
                 ...prev,
                 {
                   role: "assistant",
-                  content: csRound || undefined,
-                  reasoning_content: rsRound || undefined,
+                  content: contentRef.current || undefined,
+                  reasoning_content: reasoningRef.current || undefined,
                 },
               ];
             }
             return prev;
           });
+          reasoningRef.current = "";
+          contentRef.current = "";
           setReasoningStream("");
           setContentStream("");
           setIsGenerating(true);
@@ -134,26 +177,26 @@ export default function Home() {
           break;
 
         case "reasoning":
-          setReasoningStream((prev) => prev + data.delta);
+          // 关键: ref 先追加, setState 同步用 ref.current (避免 setState 异步导致丢数据)
+          reasoningRef.current += data.delta;
+          setReasoningStream(reasoningRef.current);
           break;
 
         case "content":
-          setContentStream((prev) => prev + data.delta);
+          contentRef.current += data.delta;
+          setContentStream(contentRef.current);
           break;
 
         case "tool_start":
           // 关键: 在推入工具消息之前, 先把"刚刚想清楚的内容"结算
-          // 关键: 用函数式 setState 捕获最新 prev, 不要用 ref (useEffect 永远赶不上同一批)
-          let rsTool = "", csTool = "";
-          setReasoningStream((prev) => { rsTool = prev; return prev; });
-          setContentStream((prev) => { csTool = prev; return prev; });
+          // 用 ref.current 而非闭包 (闭包/socket.onmessage 一次性赋值后会过期)
           setMessages((prev) => {
             const newMessages = [...prev];
-            if (rsTool || csTool) {
+            if (reasoningRef.current || contentRef.current) {
               newMessages.push({
                 role: "assistant",
-                content: csTool || undefined,
-                reasoning_content: rsTool || undefined,
+                content: contentRef.current || undefined,
+                reasoning_content: reasoningRef.current || undefined,
               });
             }
             newMessages.push({
@@ -165,7 +208,9 @@ export default function Home() {
             });
             return newMessages;
           });
-          // 结算后立即清空, 为后续输出腾出空间
+          // 结算后立即清空 ref 和 state
+          reasoningRef.current = "";
+          contentRef.current = "";
           setReasoningStream("");
           setContentStream("");
           break;
@@ -186,14 +231,17 @@ export default function Home() {
           break;
 
         case "wait_approval":
+          // 用 ref.current 读最新流值 (替代闭包捕获)
           setMessages((prev) => [
             ...prev,
             {
               role: "assistant",
               content: data.content,
-              reasoning_content: reasoningStream || undefined,
+              reasoning_content: reasoningRef.current || undefined,
             },
           ]);
+          reasoningRef.current = "";
+          contentRef.current = "";
           setReasoningStream("");
           setContentStream("");
           setApprovalPhase(data.phase);
@@ -207,9 +255,11 @@ export default function Home() {
             {
               role: "assistant",
               content: data.content,
-              reasoning_content: reasoningStream || undefined,
+              reasoning_content: reasoningRef.current || undefined,
             },
           ]);
+          reasoningRef.current = "";
+          contentRef.current = "";
           setReasoningStream("");
           setContentStream("");
           setIsWaitingApproval(false);
@@ -448,14 +498,11 @@ export default function Home() {
               </motion.div>
             );
           } else {
-            // Assistant Message — frameless typography
+            // Assistant Message — 用 ReasoningPanel 统一历史和实时 UI
             return (
               <div key={index} className="mb-8 select-text">
                 {msg.reasoning_content && (
-                  <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm">
-                    <p className="text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider mb-1">深度思考</p>
-                    <p className="text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">{msg.reasoning_content}</p>
-                  </div>
+                  <ReasoningPanel content={msg.reasoning_content} isLive={false} />
                 )}
                 {msg.content && (
                   <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
@@ -467,24 +514,11 @@ export default function Home() {
           }
         })}
 
-        {/* Real-time Streaming Response */}
+        {/* Real-time Streaming Response — 用 ReasoningPanel */}
         {(reasoningStream || contentStream) && (
           <div className="mb-8 select-text">
             {reasoningStream && (
-              <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
-                <button
-                  onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
-                >
-                  <span>{isThinkingExpanded ? "收起思考过程" : "已思考 " + (thinkingStartTime ? Math.round((Date.now() - thinkingStartTime) / 1000) : 0) + " 秒"}</span>
-                  {isThinkingExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-                {isThinkingExpanded && (
-                  <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
-                    {reasoningStream}
-                  </div>
-                )}
-              </div>
+              <ReasoningPanel content={reasoningStream} isLive={true} startTime={thinkingStartTime} />
             )}
             {contentStream && (
               <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
