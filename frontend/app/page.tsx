@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, User } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, RefreshCw, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
@@ -20,67 +20,161 @@ interface TokenInfo {
   token_count: number;
 }
 
-// === ReasoningPanel: 渲染已定型历史, 支持用户手动折叠 ===
-// 实时思考由 LiveAgentContainer (原生 DOM) 接管, 永远展开 — 用户看流式
-// 思考结束后定型到 messages, 此时由本组件渲染, 默认折叠 — 节省屏幕
-// 用户可点击 button 展开查看
-function ReasoningPanel({ content }: { content: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+// === ReasoningPanel: 渲染已定型历史, 支持手动折叠 + autoCollapse 接力 ===
+// autoCollapse=true 时, 400ms 后自动收起 (历史 thinking 接力折叠)
+// height 改 "auto" 替代 max-height, 真正解决"收起卡顿"
+function ReasoningPanel({
+  content,
+  autoCollapse = false,
+}: {
+  content: string;
+  autoCollapse?: boolean;
+}) {
+  const [isExpanded, setIsExpanded] = useState(autoCollapse);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // autoCollapse 模式: 50ms 后极速触发收起 (光速折叠, 不留可见的展开过程)
+  useEffect(() => {
+    if (autoCollapse) {
+      const timer = setTimeout(() => setIsExpanded(false), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [autoCollapse]);
 
   if (!content) return null;
 
   return (
-    <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
+    <div className="pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
       >
         <span>已完成思考</span>
-        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        <motion.span
+          animate={{ rotate: isExpanded ? 180 : 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          className="inline-flex"
+        >
+          <ChevronDown className="w-3.5 h-3.5" />
+        </motion.span>
       </button>
-      {isExpanded && (
-        <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
-          {content}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            key="reasoning-content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+              {content}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-// === LiveAgentContainer: React.memo + () => true 物理隔离 ===
-// 关键: () => true 让 React 永远认为 props 没变, 永不触发 re-render
-// 内部 DOM 完全由原生 JS 掌控, 不会被 React 协调机制抹除
-const LiveAgentContainer = React.memo(
-  () => {
-    return (
-      <div id="live-agent-container" style={{ display: "none" }} className="mb-8">
-        {/* 实时思考框 */}
-        <div
-          id="live-reasoning-box"
-          style={{ display: "none" }}
-          className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
-        >
-          <div className="text-[10px] text-indigo-400 dark:text-indigo-500 uppercase tracking-wider mb-1 font-semibold select-none">
-            正在思考 <span id="live-time-text">0</span> 秒
-          </div>
-          <span
-            id="live-reasoning-text"
-            className="text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed"
-          ></span>
-        </div>
-        {/* 实时正文框 */}
-        <div
-          id="live-content-box"
-          style={{ display: "none" }}
-          className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text"
-        >
-          <span id="live-content-text"></span>
-        </div>
-      </div>
-    );
-  },
-  () => true  // 👈 永远返回 true, 阻断 React 重绘
-);
+// === AnimatedLivePanel: React 状态驱动 + framer-motion layout ===
+// height: "auto" + spring 200/25 → 文字换行时果冻般平滑撑开
+// exit 改为极短 fade-out (100ms tween) → 退场干脆, 不弹跳
+// reasoningAutoCollapse 概念与 ReasoningPanel.autoCollapse 一致:
+//   - reasoning 出现: 展开
+//   - content 出现 (reasoningAutoCollapse=true): 折叠
+function AnimatedLivePanel({
+  reasoning,
+  content,
+  time,
+}: {
+  reasoning: string;
+  content: string;
+  time: number;
+}) {
+  // 当 content 出现时, 思考框应该自动折叠 (与 ReasoningPanel.autoCollapse 同概念)
+  const reasoningAutoCollapse = !!content;
+
+  // 初始值: 有 content → 直接折叠, 无 content → 展开
+  const [isReasoningExpanded, setIsReasoningExpanded] = useState(!reasoningAutoCollapse);
+
+  // reasoning 从空变有时 (新一轮开始), 重新展开 — 同 ReasoningPanel 模式
+  useEffect(() => {
+    if (reasoning) {
+      setIsReasoningExpanded(true);
+    }
+  }, [reasoning]);
+
+  // content 出现时折叠思考 (与 ReasoningPanel.autoCollapse 行为一致)
+  useEffect(() => {
+    if (content) {
+      setIsReasoningExpanded(false);
+    }
+  }, [content]);
+
+  return (
+    <motion.div
+      layout
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className={content ? "mb-8" : "mb-2"}
+    >
+      <AnimatePresence>
+        {reasoning && (
+          <motion.div
+            key="reasoning-box"
+            layout
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}  // 极短 fade-out, 不用 y 避免位移
+            transition={{ type: "tween", duration: 0.1 }}  // 干脆退出
+            className="mb-2 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
+          >
+            <button
+              onClick={() => setIsReasoningExpanded(!isReasoningExpanded)}
+              className="w-full flex items-center justify-between text-[10px] text-indigo-400 dark:text-indigo-500 uppercase tracking-wider font-semibold select-none"
+            >
+              <span>
+                {isReasoningExpanded
+                  ? `正在思考 ${time} 秒`
+                  : "已完成思考"}
+              </span>
+              <motion.span
+                animate={{ rotate: isReasoningExpanded ? 180 : 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className="inline-flex"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </motion.span>
+            </button>
+            {isReasoningExpanded && (
+              <div className="mt-1 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+                {reasoning}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {content && (
+          <motion.div
+            key="content-box"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            // 不带 layout: 正文换行时高度直接跳,无果冻
+            // 保留 motion 包装供 AnimatePresence 处理退场
+            transition={{ duration: 0.2 }}
+            className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text"
+          >
+            {content}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -95,57 +189,53 @@ export default function Home() {
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number>(0);
 
+  // === 实时流状态 (RAF 节流) ===
+  const [liveReasoning, setLiveReasoning] = useState<string>("");
+  const [liveContent, setLiveContent] = useState<string>("");
+  const [thinkTime, setThinkTime] = useState<number>(0);
+
+  // === 实时流 Refs ===
+  const liveReasoningRef = useRef<string>("");
+  const liveContentRef = useRef<string>("");
+  const isRenderingRef = useRef<boolean>(false);  // RAF 节流锁
+  const thinkTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // === 原生 DOM 工具函数 ===
-  const flushLiveStreamToMessages = () => {
-    const rText = document.getElementById("live-reasoning-text");
-    const cText = document.getElementById("live-content-text");
-    const txtR = rText?.textContent || "";
-    const txtC = cText?.textContent || "";
-    if (txtR || txtC) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant" as const,
-          content: txtC || undefined,
-          reasoning_content: txtR || undefined,
-        },
-      ]);
+  // === 滚动意图侦测 (修复 2) ===
+  const isScrolledToBottom = useRef<boolean>(true);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    // 阈值 150px: 离底部 150px 内算"在底部"
+    isScrolledToBottom.current = scrollHeight - scrollTop - clientHeight < 150;
+  };
+
+  // === 实时流清理 ===
+  const clearLiveStream = () => {
+    liveReasoningRef.current = "";
+    liveContentRef.current = "";
+    setLiveReasoning("");
+    setLiveContent("");
+    setThinkTime(0);
+    if (thinkTimerRef.current) {
+      clearInterval(thinkTimerRef.current);
+      thinkTimerRef.current = null;
     }
   };
 
-  const clearLiveStreamContainer = () => {
-    // 清理计时器
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    // 重置 DOM
-    const rText = document.getElementById("live-reasoning-text");
-    const cText = document.getElementById("live-content-text");
-    const rBox = document.getElementById("live-reasoning-box");
-    const cBox = document.getElementById("live-content-box");
-    const container = document.getElementById("live-agent-container");
-    const timeEl = document.getElementById("live-time-text");
-    if (rText) rText.textContent = "";
-    if (cText) cText.textContent = "";
-    if (timeEl) timeEl.textContent = "0";
-    if (rBox) rBox.style.display = "none";
-    if (cBox) cBox.style.display = "none";
-    if (container) container.style.display = "none";
-  };
-
-  // Auto-scroll chat window
+  // Auto-scroll chat window (修复 2: 滚动意图侦测)
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isWaitingApproval]);
+    if (!isScrolledToBottom.current) return;
+    chatEndRef.current?.scrollIntoView({
+      behavior: isGenerating ? "auto" : "smooth",  // 流式用 auto 避免动画排队
+    });
+  }, [messages, isWaitingApproval, liveReasoning, liveContent, isGenerating]);
 
   const resetWorkspace = () => {
     setMessages([]);
-    clearLiveStreamContainer();
+    clearLiveStream();
     setDocxPath("");
     setIsWaitingApproval(false);
     setApprovalPhase(null);
@@ -154,6 +244,7 @@ export default function Home() {
     setSelectedToolId(null);
     setInputValue("");
     setFeedbackValue("");
+    isScrolledToBottom.current = true;  // 重置, 准备跟读
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -185,27 +276,32 @@ export default function Home() {
 
       switch (data.type) {
         case "round_start": {
-          // === 启动原生秒数计时器 ===
-          if (timerRef.current) clearInterval(timerRef.current);
-          const startTime = Date.now();
-          const timeEl = document.getElementById("live-time-text");
-          if (timeEl) timeEl.textContent = "0";
-          timerRef.current = setInterval(() => {
-            const el = document.getElementById("live-time-text");
-            if (el) el.textContent = String(Math.round((Date.now() - startTime) / 1000));
-          }, 1000);
+          // 修复 B: 先把当前 ref 里的内容固化为 messages (防止"被后端打回"时数据丢失)
+          // 后端在 LLM 漏调/错调工具时会丢弃上一轮 reasoning+content, 直接发 round_start
+          // 此时如果没有兜底固化, 用户会看到内容"突然消失"
+          const prevR = liveReasoningRef.current;
+          const prevC = liveContentRef.current;
+          if (prevR || prevC) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant" as const,
+                content: prevC || undefined,
+                reasoning_content: prevR || undefined,
+              },
+            ]);
+          }
+          // 然后才清空
+          liveReasoningRef.current = "";
+          liveContentRef.current = "";
+          setLiveReasoning("");
+          setLiveContent("");
+          setThinkTime(0);
 
-          // === 显示容器, 重置内部文本 ===
-          const container = document.getElementById("live-agent-container");
-          if (container) container.style.display = "block";
-          const rBox = document.getElementById("live-reasoning-box");
-          const cBox = document.getElementById("live-content-box");
-          if (rBox) rBox.style.display = "none";
-          if (cBox) cBox.style.display = "none";
-          const rText = document.getElementById("live-reasoning-text");
-          const cText = document.getElementById("live-content-text");
-          if (rText) rText.textContent = "";
-          if (cText) cText.textContent = "";
+          if (thinkTimerRef.current) clearInterval(thinkTimerRef.current);
+          thinkTimerRef.current = setInterval(() => {
+            setThinkTime((prev) => prev + 1);
+          }, 1000);
 
           setIsGenerating(true);
           if (data.token_count !== undefined) {
@@ -218,30 +314,48 @@ export default function Home() {
           break;
 
         case "reasoning": {
-          // === 纯原生 DOM 累加: 绕过 React 批处理, 浏览器立即 paint ===
-          const el = document.getElementById("live-reasoning-text");
-          const box = document.getElementById("live-reasoning-box");
-          if (el && box) {
-            el.textContent += data.delta;
-            box.style.display = "block";
+          // RAF 节流
+          liveReasoningRef.current += data.delta;
+          if (!isRenderingRef.current) {
+            isRenderingRef.current = true;
+            requestAnimationFrame(() => {
+              setLiveReasoning(liveReasoningRef.current);
+              isRenderingRef.current = false;
+            });
           }
           break;
         }
 
         case "content": {
-          const el = document.getElementById("live-content-text");
-          const box = document.getElementById("live-content-box");
-          if (el && box) {
-            el.textContent += data.delta;
-            box.style.display = "block";
+          liveContentRef.current += data.delta;
+          if (!isRenderingRef.current) {
+            isRenderingRef.current = true;
+            requestAnimationFrame(() => {
+              setLiveContent(liveContentRef.current);
+              isRenderingRef.current = false;
+            });
           }
           break;
         }
 
         case "tool_start": {
-          // === 结算: DOM 文本 -> messages, 然后清空 DOM ===
-          flushLiveStreamToMessages();
-          clearLiveStreamContainer();
+          // 读 ref 固化为 messages
+          const txtR = liveReasoningRef.current;
+          const txtC = liveContentRef.current;
+          if (txtR || txtC) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant" as const,
+                content: txtC || undefined,
+                reasoning_content: txtR || undefined,
+              },
+            ]);
+          }
+          // 延迟一帧清空: 让 messages 推入先 commit, AnimatePresence 看到 exit
+          requestAnimationFrame(() => {
+            clearLiveStream();
+          });
           setMessages((prev) => [
             ...prev,
             {
@@ -272,15 +386,33 @@ export default function Home() {
         }
 
         case "wait_approval": {
-          flushLiveStreamToMessages();
-          clearLiveStreamContainer();
+          const txtR = liveReasoningRef.current;
+          const txtC = liveContentRef.current;
+          if (txtR || txtC) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant" as const,
+                content: txtC || undefined,
+                reasoning_content: txtR || undefined,
+              },
+            ]);
+          }
+          requestAnimationFrame(() => {
+            clearLiveStream();
+          });
+
+          // 修复 1: 智能 push vs merge
+          // 如果最后一条是 assistant, 合并 content; 否则 push 新 assistant
           if (data.content !== undefined) {
             setMessages((prev) => {
               const lastIdx = prev.length - 1;
               if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
+                // 最后一条是 assistant: 合并 content
                 return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
               }
-              return prev;
+              // 最后一条不是 assistant (如 tool): 安全地 push 新 assistant
+              return [...prev, { role: "assistant", content: data.content }];
             });
           }
           setApprovalPhase(data.phase);
@@ -290,15 +422,30 @@ export default function Home() {
         }
 
         case "done": {
-          flushLiveStreamToMessages();
-          clearLiveStreamContainer();
+          const txtR = liveReasoningRef.current;
+          const txtC = liveContentRef.current;
+          if (txtR || txtC) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant" as const,
+                content: txtC || undefined,
+                reasoning_content: txtR || undefined,
+              },
+            ]);
+          }
+          requestAnimationFrame(() => {
+            clearLiveStream();
+          });
+
+          // 修复 1: 同 wait_approval 模式
           if (data.content !== undefined) {
             setMessages((prev) => {
               const lastIdx = prev.length - 1;
               if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
                 return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
               }
-              return prev;
+              return [...prev, { role: "assistant", content: data.content }];
             });
           }
           setIsWaitingApproval(false);
@@ -319,9 +466,9 @@ export default function Home() {
       setIsWaitingApproval(false);
       setApprovalPhase(null);
       setIsGenerating(false);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+      if (thinkTimerRef.current) {
+        clearInterval(thinkTimerRef.current);
+        thinkTimerRef.current = null;
       }
     };
 
@@ -341,6 +488,7 @@ export default function Home() {
     setInputValue("");
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      isScrolledToBottom.current = true;  // 新会话, 用户应跟读
       setIsGenerating(true);
       startAgentSession(prompt, "");
       return;
@@ -348,6 +496,7 @@ export default function Home() {
 
     if (isWaitingApproval) return;
 
+    isScrolledToBottom.current = true;  // 修复 2: 用户发了 prompt, 应该跟读
     setMessages((prev) => [...prev, { role: "user", content: prompt }]);
     setIsGenerating(true);
     wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
@@ -372,6 +521,7 @@ export default function Home() {
       : `【拒绝反馈】反馈修改建议：${feedback}`;
     setMessages((prev) => [...prev, { role: "user", content: userActionText }]);
 
+    isScrolledToBottom.current = true;  // 修复 2: 审批完成, 用户应跟读下一阶段
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     setIsGenerating(true);
@@ -386,6 +536,49 @@ export default function Home() {
     handleApprove(false, feedbackValue.trim());
     setFeedbackValue("");
   };
+
+  // === 派生 renderBlocks: 折叠 messages 数组为 4 种类型化渲染块 ===
+  // 目的: 让间距判断从"消息本身属性"升级为"前后块类型关系",更精准
+  // 类型: user | reasoning | content | toolGroup
+  const renderBlocks: Array<{
+    type: "user" | "reasoning" | "content" | "toolGroup";
+    content?: string;
+    tools?: Message[];
+    id: string;
+    autoCollapse?: boolean;
+  }> = [];
+  {
+    let i = 0;
+    while (i < messages.length) {
+      const msg = messages[i];
+      if (msg.role === "user") {
+        renderBlocks.push({ type: "user", content: msg.content, id: `user-${i}` });
+        i++;
+      } else if (msg.role === "assistant") {
+        if (msg.reasoning_content) {
+          const hasContentNext = !!msg.content;
+          const isLastFew = i >= messages.length - 2;
+          renderBlocks.push({
+            type: "reasoning",
+            content: msg.reasoning_content,
+            autoCollapse: isLastFew && !hasContentNext,
+            id: `reasoning-${i}`,
+          });
+        }
+        if (msg.content) {
+          renderBlocks.push({ type: "content", content: msg.content, id: `content-${i}` });
+        }
+        i++;
+      } else if (msg.role === "tool") {
+        const tools: Message[] = [];
+        while (i < messages.length && messages[i].role === "tool") {
+          tools.push(messages[i]);
+          i++;
+        }
+        renderBlocks.push({ type: "toolGroup", tools, id: `toolGroup-${i}` });
+      }
+    }
+  }
 
   return (
     <div className="w-full h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-zinc-950 dark:via-zinc-900 dark:to-zinc-950 text-slate-900 dark:text-zinc-50 font-sans">
@@ -433,10 +626,13 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main Chat Flow Container */}
-      <div className="flex-1 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      {/* Main Chat Flow Container (修复 2: onScroll 绑定) */}
+      <div
+        className="flex-1 w-full overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+        onScroll={handleScroll}
+      >
         <div className="max-w-4xl w-full mx-auto py-6 space-y-6 px-4 md:px-8">
-        {messages.length === 0 && (
+        {messages.length === 0 && !liveReasoning && !liveContent && (
           <div className="h-full flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-zinc-500 select-none space-y-4">
             <div className="w-14 h-14 rounded-2xl bg-slate-100/80 dark:bg-zinc-800/80 shadow-sm flex items-center justify-center text-slate-400 dark:text-zinc-500">
               <Terminal className="w-6 h-6" />
@@ -454,106 +650,144 @@ export default function Home() {
           </div>
         )}
 
-        {messages.map((msg, index) => {
-          if (msg.role === "user") {
-            return (
-              <div key={index} className="mb-6 pl-9 relative">
-                <User size={14} className="absolute left-0 top-[2px] text-indigo-400 dark:text-indigo-500" />
-                <p className="whitespace-pre-wrap select-text text-[15px] font-medium text-slate-800 dark:text-zinc-100 leading-relaxed">{msg.content}</p>
-              </div>
-            );
-          } else if (msg.role === "tool") {
-            if (index > 0 && messages[index - 1].role === "tool") {
-              return null;
-            }
-            const toolGroup: any[] = [];
-            let j = index;
-            while (j < messages.length && messages[j].role === "tool") {
-              toolGroup.push(messages[j]);
-              j++;
-            }
+        {renderBlocks.map((block, index) => {
+          const nextBlock = renderBlocks[index + 1];
 
-            return (
-              <motion.div
-                key={`tool-group-${index}`}
-                className="flex flex-wrap gap-x-4 gap-y-1 max-w-[90%] my-3 pl-3 border-l-2 border-slate-200/60 dark:border-zinc-800/60"
-                layout
-              >
-                <AnimatePresence mode="popLayout">
-                  {toolGroup.map((tool, tIdx) => {
-                    const isExpanded = selectedToolId === tool.id;
-                    return (
-                      <motion.div
-                        key={tool.id || `tool-${tIdx}`}
-                        className="relative"
-                        layout
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, transition: { duration: 0.1 } }}
-                        transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                      >
-                        <span
-                          onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
-                          className={`inline-flex items-center gap-1 font-mono text-[11px] cursor-pointer select-none ${
-                            tool.toolStatus === "running"
-                              ? "text-blue-400 dark:text-blue-400"
-                              : tool.toolStatus === "error"
-                              ? "text-red-400 dark:text-red-400"
-                              : "text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-400"
-                          } ${tool.toolStatus === "running" ? "animate-pulse" : ""}`}
-                        >
-                          <span className="text-slate-300 dark:text-zinc-700 text-[10px]">{">"}_{
-                            tool.toolName
-                          }</span>
-                        </span>
+          // === 动态 Margin 终极规则：自适应上下文 ===
+          let marginClass = "mb-8";
+          const isLast = index === renderBlocks.length - 1;
 
-                        {isExpanded && (
-                          <div className="mt-2 w-full max-w-[600px] border border-slate-200/60 dark:border-zinc-800/60 bg-slate-50/80 dark:bg-zinc-900/50 backdrop-blur-sm rounded-md p-3 space-y-3 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                            {tool.toolArgs && (
-                              <div>
-                                <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">args</p>
-                                <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-40 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                                  {tool.toolArgs}
-                                </pre>
-                              </div>
-                            )}
-                            {tool.toolResult && (
-                              <div>
-                                <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">result</p>
-                                <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                                  {tool.toolResult}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </motion.div>
-                    );
-                  })}
-                </AnimatePresence>
-              </motion.div>
-            );
+          if (!isLast) {
+            // 情况 1：后面还有历史区块
+            if (nextBlock?.type === "user") {
+              // 下一个是用户的提问，说明 AI 这一轮回合彻底结束了，必须留出标准的呼吸间距
+              marginClass = "mb-8";
+            } else {
+              // 下一个还是 AI 的输出（工具、思考或正文），说明它们属于同一个思维链，紧凑排版
+              marginClass = "mb-2";
+            }
           } else {
-            return (
-              <div key={index} className="mb-8 select-text">
-                {msg.reasoning_content && (
-                  <ReasoningPanel content={msg.reasoning_content} />
-                )}
-                {msg.content && (
-                  <div className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed">
-                    <MarkdownRenderer content={msg.content} />
-                  </div>
-                )}
-              </div>
-            );
+            // 情况 2：这是当前历史记录里的最后一个区块
+            if (isGenerating) {
+              // 系统仍在生成中！说明它的正下方紧紧挨着 AnimatedLivePanel 实时流组件，必须无缝拼接！
+              marginClass = "mb-2";
+            } else {
+              // 系统已闲置，生成彻底结束。下方是空白区或输入框，留出大间距
+              marginClass = "mb-8";
+            }
+          }
+
+          switch (block.type) {
+            case "user":
+              return (
+                <div key={block.id} className="mb-6 pl-9 relative">
+                  <User size={14} className="absolute left-0 top-[2px] text-indigo-400 dark:text-indigo-500" />
+                  <p className="whitespace-pre-wrap select-text text-[15px] font-medium text-slate-800 dark:text-zinc-100 leading-relaxed">
+                    {block.content}
+                  </p>
+                </div>
+              );
+
+            case "reasoning":
+              return (
+                <div key={block.id} className={marginClass}>
+                  <ReasoningPanel
+                    content={block.content!}
+                    autoCollapse={block.autoCollapse ?? false}
+                  />
+                </div>
+              );
+
+            case "content":
+              return (
+                <motion.div
+                  key={block.id}
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.4, duration: 0.2 }}
+                  className={`text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text ${marginClass}`}
+                >
+                  <MarkdownRenderer content={block.content!} />
+                </motion.div>
+              );
+
+            case "toolGroup":
+              return (
+                <motion.div
+                  key={block.id}
+                  className={`flex flex-wrap gap-x-4 gap-y-1 max-w-[90%] mt-1 pl-3 border-l-2 border-slate-200/60 dark:border-zinc-800/60 ${marginClass}`}
+                  layout
+                >
+                  <AnimatePresence mode="popLayout">
+                    {block.tools!.map((tool, tIdx) => {
+                      const isExpanded = selectedToolId === tool.id;
+                      return (
+                        <motion.div
+                          key={tool.id || `tool-${tIdx}`}
+                          className="relative"
+                          layout
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                          // 拆分 transition: layout 点击展开 0 延迟, opacity/y 入场等 0.4s 避让思考框
+                          transition={{
+                            layout: { duration: 0.2, ease: "easeOut" },
+                            opacity: { delay: 0.4, duration: 0.2 },
+                            y: { delay: 0.4, duration: 0.2, ease: "easeOut" },
+                          }}
+                        >
+                          <span
+                            onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
+                            className={`inline-flex items-center gap-1 font-mono text-[11px] cursor-pointer select-none ${
+                              tool.toolStatus === "running"
+                                ? "text-blue-400 dark:text-blue-400"
+                                : tool.toolStatus === "error"
+                                ? "text-red-400 dark:text-red-400"
+                                : "text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-400"
+                            } ${tool.toolStatus === "running" ? "animate-pulse" : ""}`}
+                          >
+                            <span className="text-slate-300 dark:text-zinc-700 text-[10px]">{">"}_{
+                              tool.toolName
+                            }</span>
+                          </span>
+
+                          {isExpanded && (
+                            <div className="mt-2 w-full max-w-[600px] border border-slate-200/60 dark:border-zinc-800/60 bg-slate-50/80 dark:bg-zinc-900/50 backdrop-blur-sm rounded-md p-3 space-y-3 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                              {tool.toolArgs && (
+                                <div>
+                                  <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">args</p>
+                                  <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-40 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                                    {tool.toolArgs}
+                                  </pre>
+                                </div>
+                              )}
+                              {tool.toolResult && (
+                                <div>
+                                  <p className="text-[9px] font-mono text-slate-400 dark:text-zinc-600 uppercase tracking-widest font-semibold mb-1.5">result</p>
+                                  <pre className="text-[10px] font-mono bg-white/60 dark:bg-zinc-950/60 p-2 rounded text-slate-500 dark:text-zinc-400 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                                    {tool.toolResult}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
+                </motion.div>
+              );
+
+            default:
+              return null;
           }
         })}
 
-        {/* === React.memo 物理隔离的原生流容器 === */}
-        <LiveAgentContainer />
+        {/* === 实时流式 AnimatedLivePanel === */}
+        <AnimatedLivePanel reasoning={liveReasoning} content={liveContent} time={thinkTime} />
 
         {/* Ghost-style Thinking Indicator */}
-        {isGenerating && (
+        {isGenerating && !liveReasoning && !liveContent && (
           <div className="flex items-center gap-3 mt-3 px-1">
             <div className="relative flex items-center justify-center w-5 h-5">
               <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
