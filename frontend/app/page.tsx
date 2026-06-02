@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, RefreshCw, User } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, ChevronUp, RefreshCw, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 
@@ -20,17 +20,29 @@ interface TokenInfo {
   token_count: number;
 }
 
-// === 简化版 ReasoningPanel: 只渲染已定型历史 ===
+// === ReasoningPanel: 渲染已定型历史, 支持用户手动折叠 ===
+// 实时思考由 LiveAgentContainer (原生 DOM) 接管, 永远展开 — 用户看流式
+// 思考结束后定型到 messages, 此时由本组件渲染, 默认折叠 — 节省屏幕
+// 用户可点击 button 展开查看
 function ReasoningPanel({ content }: { content: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   if (!content) return null;
+
   return (
     <div className="mb-3 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm overflow-hidden">
-      <div className="px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider select-none">
-        已完成思考
-      </div>
-      <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
-        {content}
-      </div>
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono font-medium text-indigo-400 dark:text-indigo-500 uppercase tracking-wider hover:bg-slate-100/60 dark:hover:bg-zinc-800/60"
+      >
+        <span>已完成思考</span>
+        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+      </button>
+      {isExpanded && (
+        <div className="px-3 pb-3 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+          {content}
+        </div>
+      )}
     </div>
   );
 }
