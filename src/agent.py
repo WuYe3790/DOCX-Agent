@@ -277,12 +277,14 @@ class Agent:
                         rc = model_extra.get("reasoning") if isinstance(model_extra, dict) else None
                     if rc:
                         accumulated_reasoning += rc
+                        self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning)})
                         yield {"type": "reasoning", "delta": rc}
 
                     # Content
                     c = getattr(delta, "content", None)
                     if c:
                         accumulated_content += c
+                        self._append_log("chunk_event", {"round": self._round_index, "type": "content", "len": len(c), "cum": len(accumulated_content)})
                         yield {"type": "content", "delta": c}
 
                     # Tool calls（跨 chunk 累积 arguments）
@@ -358,6 +360,7 @@ class Agent:
                     args = tc["function"]["arguments"]
 
                     self._append_log(f"调用工具: {name}", {"tool": name, "arguments": args})
+                    self._append_log("chunk_event", {"round": self._round_index, "type": "tool_start", "name": name})
 
                     yield {"type": "tool_start", "name": name, "arguments": args}
 
