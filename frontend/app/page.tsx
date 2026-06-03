@@ -64,7 +64,7 @@ function ReasoningPanel({
             key="reasoning-content"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
+            exit={{ height: 0 }}
             transition={{ duration: 0.2, ease: "easeOut" }}
             className="overflow-hidden"
           >
@@ -119,63 +119,57 @@ function AnimatedLivePanel({
       transition={{ duration: 0.2, ease: "easeOut" }}
       className={content ? "mb-8" : "mb-2"}
     >
-      <AnimatePresence>
-        {reasoning && (
-          <motion.div
-            key="reasoning-box"
-            layout
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}  // 极短 fade-out, 不用 y 避免位移
-            transition={{
-              layout: { duration: 0.2, ease: "easeOut" },
-              opacity: { duration: 0.1, ease: "linear" },
-              default: { duration: 0.1 }
-            }}
-            className="mb-2 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
+      {reasoning && (
+        <motion.div
+          key="reasoning-box"
+          layout
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            layout: { duration: 0.2, ease: "easeOut" },
+            opacity: { duration: 0.1, ease: "linear" },
+            default: { duration: 0.1 }
+          }}
+          className="mb-2 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
+        >
+          <button
+            onClick={() => setIsReasoningExpanded(!isReasoningExpanded)}
+            className="w-full flex items-center justify-between text-[10px] text-indigo-400 dark:text-indigo-500 uppercase tracking-wider font-semibold select-none"
           >
-            <button
-              onClick={() => setIsReasoningExpanded(!isReasoningExpanded)}
-              className="w-full flex items-center justify-between text-[10px] text-indigo-400 dark:text-indigo-500 uppercase tracking-wider font-semibold select-none"
+            <span>
+              {isReasoningExpanded
+                ? `正在思考 ${time} 秒`
+                : "已完成思考"}
+            </span>
+            <motion.span
+              animate={{ rotate: isReasoningExpanded ? 180 : 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="inline-flex"
             >
-              <span>
-                {isReasoningExpanded
-                  ? `正在思考 ${time} 秒`
-                  : "已完成思考"}
-              </span>
-              <motion.span
-                animate={{ rotate: isReasoningExpanded ? 180 : 0 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                className="inline-flex"
-              >
-                <ChevronDown className="w-3.5 h-3.5" />
-              </motion.span>
-            </button>
-            {isReasoningExpanded && (
-              <div className="mt-1 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
-                {reasoning}
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </motion.span>
+          </button>
+          {isReasoningExpanded && (
+            <div className="mt-1 text-xs text-slate-400 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
+              {reasoning}
+            </div>
+          )}
+        </motion.div>
+      )}
 
-      <AnimatePresence>
-        {content && (
-          <motion.div
-            key="content-box"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            // 不带 layout: 正文换行时高度直接跳,无果冻
-            // 保留 motion 包装供 AnimatePresence 处理退场
-            transition={{ duration: 0.2 }}
-            className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text"
-          >
-            {content}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {content && (
+        <motion.div
+          key="content-box"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          // 不带 layout: 正文换行时高度直接跳,无果冻
+          // 保留 motion 包装供 AnimatePresence 处理退场
+          transition={{ duration: 0.2 }}
+          className="text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text"
+        >
+          {content}
+        </motion.div>
+      )}
     </motion.div>
   );
 }
@@ -781,18 +775,7 @@ export default function Home() {
         {/* === 实时流式 AnimatedLivePanel === */}
         <AnimatedLivePanel reasoning={liveReasoning} content={liveContent} time={thinkTime} />
 
-        {/* Ghost-style Thinking Indicator */}
-        {isGenerating && !liveReasoning && !liveContent && (
-          <div className="flex items-center gap-3 mt-3 px-1">
-            <div className="relative flex items-center justify-center w-5 h-5">
-              <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
-              <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-indigo-500 animate-spin"></div>
-            </div>
-            <span className="text-xs font-mono font-medium text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-slate-400 animate-pulse">
-              Agent 深度思考与调度中...
-            </span>
-          </div>
-        )}
+        {/* 旧的文档流内指示器已移除: 替换为 footer 上方悬浮胶囊(见下) */}
 
         {/* Inline Phase Checkpoint (Waiting Approval) */}
         {isWaitingApproval && (
@@ -845,7 +828,23 @@ export default function Home() {
       </div>
 
       {/* Input Prompt Box area */}
-      <footer className="bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky bottom-0 z-50 p-4 shrink-0">
+      <footer className="bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky bottom-0 z-50 p-4 shrink-0 relative">
+        {/* === 悬浮毛玻璃状态胶囊 (脱离文档流，0抖动) === */}
+        <AnimatePresence>
+          {isGenerating && !liveReasoning && !liveContent && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 5, transition: { duration: 0.2 } }}
+              className="absolute -top-6 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm shadow-sm border border-slate-200/50 dark:border-zinc-700/50 rounded-full flex items-center gap-2 z-50 pointer-events-none"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+              <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-zinc-400 tracking-wider uppercase">
+                System Routing
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <form onSubmit={handleSendPrompt} className="max-w-4xl w-full mx-auto flex items-center gap-3">
           <input
             type="text"
