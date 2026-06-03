@@ -127,7 +127,11 @@ function AnimatedLivePanel({
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}  // 极短 fade-out, 不用 y 避免位移
-            transition={{ type: "tween", duration: 0.1 }}  // 干脆退出
+            transition={{
+              layout: { duration: 0.2, ease: "easeOut" },
+              opacity: { duration: 0.1, ease: "linear" },
+              default: { duration: 0.1 }
+            }}
             className="mb-2 pl-4 border-l-2 border-indigo-200 dark:border-indigo-800 bg-slate-50/40 dark:bg-zinc-850/40 rounded-r-sm p-3"
           >
             <button
