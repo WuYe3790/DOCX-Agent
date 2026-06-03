@@ -357,9 +357,7 @@ export default function Home() {
             ]);
           }
           // 延迟一帧清空: 让 messages 推入先 commit, AnimatePresence 看到 exit
-          requestAnimationFrame(() => {
-            clearLiveStream();
-          });
+          clearLiveStream();
           setMessages((prev) => [
             ...prev,
             {
@@ -402,9 +400,7 @@ export default function Home() {
               },
             ]);
           }
-          requestAnimationFrame(() => {
-            clearLiveStream();
-          });
+          clearLiveStream();
 
           // 修复 1: 智能 push vs merge
           // 如果最后一条是 assistant, 合并 content; 否则 push 新 assistant
@@ -438,9 +434,7 @@ export default function Home() {
               },
             ]);
           }
-          requestAnimationFrame(() => {
-            clearLiveStream();
-          });
+          clearLiveStream();
 
           // 修复 1: 同 wait_approval 模式
           if (data.content !== undefined) {
@@ -704,15 +698,12 @@ export default function Home() {
 
             case "content":
               return (
-                <motion.div
+                <div
                   key={block.id}
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.4, duration: 0.2 }}
                   className={`text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text ${marginClass}`}
                 >
                   <MarkdownRenderer content={block.content!} />
-                </motion.div>
+                </div>
               );
 
             case "toolGroup":
