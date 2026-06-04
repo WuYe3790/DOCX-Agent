@@ -1,5 +1,4 @@
 import json
-from collections import Counter
 from pathlib import Path
 
 from .common import json_result
@@ -66,22 +65,6 @@ def bind_styles_to_roles(
                     f"绑定的 sample_id {invalid_samples} 不在样式画像中。"
                     f"可用的 sample_id: {available_sample_ids}"
                 ),
-                "available_sample_ids": available_sample_ids,
-                "fixed_roles": list(FIXED_ROLES),
-                "style_profile_path": str(profile_path),
-            }
-        )
-
-    duplicates = [sample_id for sample_id, count in Counter(bindings.values()).items() if count > 1]
-    if duplicates:
-        offenders = {
-            sample_id: sorted(role for role, sid in bindings.items() if sid == sample_id)
-            for sample_id in duplicates
-        }
-        return json_result(
-            {
-                "status": "error",
-                "message": f"以下 sample_id 被绑定到多个角色: {offenders}",
                 "available_sample_ids": available_sample_ids,
                 "fixed_roles": list(FIXED_ROLES),
                 "style_profile_path": str(profile_path),
