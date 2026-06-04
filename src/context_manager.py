@@ -31,7 +31,9 @@ class MessageManager:
         self._entries.append({"role": "user", "content": content})
 
     def append_assistant(self, tool_calls: list, content: str = ""):
-        msg: dict = {"role": "assistant", "tool_calls": tool_calls}
+        msg: dict = {"role": "assistant"}
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
         if content:
             msg["content"] = content
         self._entries.append(msg)
