@@ -52,7 +52,7 @@ class LLMClientAdapter:
         if self.provider == "deepseek":
             # 环境变量
             self.api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
-            self.base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+            self.base_url = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("LLM_BASE_URL")
             self.model = os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL")
             self.thinking_type = os.getenv("DOCX_AGENT_THINKING")
 
