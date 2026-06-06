@@ -315,6 +315,18 @@ export default function Home() {
 
   // === Handler: 新建会话 ===
   const handleCreateSession = async () => {
+    // Bug A 修复: 重置所有 approval + UI 状态, 避免旧 session 的状态泄漏到新 session
+    setIsWaitingApproval(false);
+    setApprovalPhase(null);
+    setIsGenerating(false);
+    setIsConnected(false);
+    setFeedbackValue("");
+    clearLiveStream();
+    setShowPreview(false);
+    setTokenCount(0);
+    setExpandedTools(new Set());
+    setSelectedToolId(null);
+
     const newSession = await createSession({ title: "新会话" });
     setSessions((prev) => [
       ...prev,
