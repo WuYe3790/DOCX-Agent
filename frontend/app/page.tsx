@@ -336,6 +336,25 @@ export default function Home() {
           break;
         }
 
+        case "reasoning_end": {
+          // 推理结束: 立即固化思考到历史, 让 ReasoningPanel 触发折叠动画
+          // 消除"思考-工具调用"之间的视觉黑洞期
+          const txtR = liveReasoningRef.current;
+          const txtC = liveContentRef.current;
+          if (txtR || txtC) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant" as const,
+                content: txtC || undefined,
+                reasoning_content: txtR || undefined,
+              },
+            ]);
+          }
+          clearLiveStream();
+          break;
+        }
+
         case "tool_start": {
           // 读 ref 固化为 messages
           const txtR = liveReasoningRef.current;

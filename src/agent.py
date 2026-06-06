@@ -249,6 +249,7 @@ class Agent:
             tool_calls_map: dict = {}
             accumulated_content = ""
             accumulated_reasoning = ""
+            reasoning_yielded: bool = False
             finish_reason = None
             usage = None
             stream_error: Exception | None = None
@@ -277,6 +278,7 @@ class Agent:
                         rc = model_extra.get("reasoning") if isinstance(model_extra, dict) else None
                     if rc:
                         accumulated_reasoning += rc
+                        reasoning_yielded = True
                         self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning)})
                         yield {"type": "reasoning", "delta": rc}
 
@@ -308,6 +310,10 @@ class Agent:
                                     tool_calls_map[idx]["id"] = tc.id
             except Exception as e:
                 stream_error = e
+
+            # Reasoning 阶段结束 → 通知前端固化（消除思考-工具视觉脱节）
+            if reasoning_yielded:
+                yield {"type": "reasoning_end"}
 
             # --- 2. Mid-stream failure: discard partial, abort ---
             if stream_error is not None:
