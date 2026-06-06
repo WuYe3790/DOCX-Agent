@@ -1,7 +1,7 @@
 """Step 1 单元测试: save_to_disk / load_from_disk / _save_lock 锁 / Checkpoint 触发"""
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent / "src"))  # 让 src/ 模块可导入
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))  # tests/ 是子目录, src/ 在仓库根
 
 import asyncio
 import json
