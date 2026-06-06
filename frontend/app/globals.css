@@ -60,6 +60,12 @@ body {
   background: var(--muted);
 }
 
+/* Firefox: 启用窄滚动条 + 同 slate/zinc 配色 (webkit 规则已存在, Firefox 需要 scrollbar-width) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 /* Monaco editor container override for flat border */
 .monaco-editor-wrapper {
   border: 1px solid var(--border);

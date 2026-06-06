@@ -47,7 +47,7 @@ export default function PreviewPanel({ show, content, onClose }: PreviewPanelPro
             </div>
 
             {/* A4 卡片主体 */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
                 <MarkdownRenderer content={content} />
               </div>
