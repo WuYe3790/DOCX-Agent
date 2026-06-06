@@ -14,6 +14,8 @@ export interface Session {
   docxPath: string;
   messages: any[];            // 完整消息历史 (用 any 避免循环依赖)
   previewContent: string;
+  approvalPhase: "style_review" | "md_draft" | "word_editing" | null;
+  isWaitingApproval: boolean;
 }
 
 export interface SessionMeta {

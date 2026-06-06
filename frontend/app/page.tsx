@@ -251,12 +251,16 @@ export default function Home() {
     messages?: Message[];
     previewContent?: string;
     docxPath?: string;
+    approvalPhase?: "style_review" | "md_draft" | "word_editing" | null;
+    isWaitingApproval?: boolean;
   }) => {
     if (!currentSessionId) return;
     const update = {
       messages: overrides?.messages ?? messages,
       previewContent: overrides?.previewContent ?? previewContent,
       docxPath: overrides?.docxPath ?? docxPath,
+      approvalPhase: overrides?.approvalPhase ?? approvalPhase,
+      isWaitingApproval: overrides?.isWaitingApproval ?? isWaitingApproval,
       updatedAt: Date.now(),
     };
     await updateSession(currentSessionId, update);
@@ -277,6 +281,8 @@ export default function Home() {
     setMessages(session.messages);
     setPreviewContent(session.previewContent);
     setDocxPath(session.docxPath);
+    setApprovalPhase(session.approvalPhase ?? null);
+    setIsWaitingApproval(session.isWaitingApproval ?? false);
     setCurrentSessionId(id);
     setCurrentSessionIdHelper(id);
   };
