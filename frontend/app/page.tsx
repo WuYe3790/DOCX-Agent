@@ -1,10 +1,22 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, RefreshCw, User } from "lucide-react";
+import { Terminal, Send, CheckCircle2, ChevronDown, RefreshCw, User, PanelLeft, Plus, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 import PreviewPanel from "../components/preview-panel";
+import SessionSidebar from "../components/session-sidebar";
+import {
+  listSessions,
+  getSession,
+  createSession,
+  updateSession,
+  deleteSession,
+  getCurrentSessionId,
+  setCurrentSessionId,
+  type SessionMeta,
+  type Session,
+} from "../lib/sessions";
 
 interface Message {
   role: "user" | "assistant" | "tool";
@@ -192,6 +204,11 @@ export default function Home() {
   const [showPreview, setShowPreview] = useState<boolean>(false);
   const [previewContent, setPreviewContent] = useState<string>("");
 
+  // === 会话管理 (IndexedDB 持久化) ===
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState<boolean>(false);
+
   // === 实时流状态 (RAF 节流) ===
   const [liveReasoning, setLiveReasoning] = useState<string>("");
   const [liveContent, setLiveContent] = useState<string>("");
@@ -208,6 +225,124 @@ export default function Home() {
 
   // === 滚动意图侦测 (修复 2) ===
   const isScrolledToBottom = useRef<boolean>(true);
+
+  // === 会话管理: 启动时加载 IndexedDB ===
+  useEffect(() => {
+    (async () => {
+      const list = await listSessions();
+      setSessions(list);
+      const cid = getCurrentSessionId();
+      const targetId = cid && list.find((s) => s.id === cid)
+        ? cid
+        : list.length > 0
+        ? list[0].id
+        : null;
+      if (targetId) {
+        await loadSessionIntoState(targetId);
+      } else {
+        await handleCreateSession();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // === 关键: 立即保存当前 session (消息完整时调用, 不 debounce, 不 useEffect 监听) ===
+  const persistCurrentSession = async (overrides?: {
+    messages?: Message[];
+    previewContent?: string;
+    docxPath?: string;
+  }) => {
+    if (!currentSessionId) return;
+    const update = {
+      messages: overrides?.messages ?? messages,
+      previewContent: overrides?.previewContent ?? previewContent,
+      docxPath: overrides?.docxPath ?? docxPath,
+      updatedAt: Date.now(),
+    };
+    await updateSession(currentSessionId, update);
+    // 同步元数据给 sidebar (实时更新 messageCount / updatedAt)
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === currentSessionId
+          ? { ...s, updatedAt: update.updatedAt, messageCount: update.messages.length }
+          : s
+      )
+    );
+  };
+
+  // === 加载完整 session 到 React state ===
+  const loadSessionIntoState = async (id: string) => {
+    const session = await getSession(id);
+    if (!session) return;
+    setMessages(session.messages);
+    setPreviewContent(session.previewContent);
+    setDocxPath(session.docxPath);
+    setCurrentSessionId(id);
+    setCurrentSessionIdHelper(id);
+  };
+
+  // === 内部: localStorage helper 别名 (避免跟 import 重名) ===
+  const setCurrentSessionIdHelper = (id: string | null) => setCurrentSessionId(id);
+
+  // === Handler: 切换会话 ===
+  const handleSelectSession = async (id: string) => {
+    if (id === currentSessionId) {
+      setSessionSidebarOpen(false);
+      return;
+    }
+    // 1. 先保存当前 (防丢)
+    await persistCurrentSession();
+    // 2. 关 WS
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+    // 3. 加载新 session 到 React state
+    await loadSessionIntoState(id);
+    // 4. 关闭 sidebar
+    setSessionSidebarOpen(false);
+    // 5. 如果新 session 有 docxPath, 重启 WS
+    if (docxPath) {
+      // 用 docxPath 启动新 session (不立即发消息)
+      // 这里简化: 仅记录 docxPath, 等用户输入再启动
+    }
+  };
+
+  // === Handler: 新建会话 ===
+  const handleCreateSession = async () => {
+    const newSession = await createSession({ title: "新会话" });
+    setSessions((prev) => [
+      ...prev,
+      {
+        id: newSession.id,
+        title: newSession.title,
+        createdAt: newSession.createdAt,
+        updatedAt: newSession.updatedAt,
+        messageCount: 0,
+      },
+    ]);
+    setCurrentSessionId(newSession.id);
+    setCurrentSessionIdHelper(newSession.id);
+    setMessages([]);
+    setPreviewContent("");
+    setDocxPath("");
+    setSessionSidebarOpen(false);
+  };
+
+  // === Handler: 删除会话 ===
+  const handleDeleteSession = async (id: string) => {
+    if (!confirm("确认删除该会话? 此操作不可恢复。")) return;
+    await deleteSession(id);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (id === currentSessionId) {
+      // 删的是当前, 切到下一个或建空
+      const remaining = sessions.filter((s) => s.id !== id);
+      if (remaining.length > 0) {
+        await handleSelectSession(remaining[0].id);
+      } else {
+        await handleCreateSession();
+      }
+    }
+  };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
@@ -236,7 +371,7 @@ export default function Home() {
     });
   }, [messages, isWaitingApproval, liveReasoning, liveContent, isGenerating]);
 
-  const resetWorkspace = () => {
+  const resetWorkspace = async () => {
     setMessages([]);
     clearLiveStream();
     setDocxPath("");
@@ -253,6 +388,7 @@ export default function Home() {
     if (wsRef.current) {
       wsRef.current.close();
     }
+    await persistCurrentSession();
   };
 
   const startAgentSession = (initialPrompt: string, path: string) => {
@@ -263,6 +399,7 @@ export default function Home() {
     // 发起新会话: 重置预览侧栏状态
     setShowPreview(false);
     setPreviewContent("");
+    void persistCurrentSession();  // 持久化空 preview 状态
 
     const socket = new WebSocket("ws://127.0.0.1:8000/api/ws/agent");
     wsRef.current = socket;
@@ -278,6 +415,7 @@ export default function Home() {
         })
       );
       setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
+      void persistCurrentSession();
     };
 
     socket.onmessage = (event) => {
@@ -316,6 +454,7 @@ export default function Home() {
           if (data.token_count !== undefined) {
             setTokenCount(data.token_count);
           }
+          void persistCurrentSession();
           break;
         }
 
@@ -363,6 +502,7 @@ export default function Home() {
             ]);
           }
           clearLiveStream();
+          void persistCurrentSession();
           break;
         }
 
@@ -392,6 +532,7 @@ export default function Home() {
               id: data.name + "_" + crypto.randomUUID(),
             },
           ]);
+          void persistCurrentSession();
           break;
         }
 
@@ -408,6 +549,7 @@ export default function Home() {
               return msg;
             })
           );
+          void persistCurrentSession();
           break;
         }
 
@@ -448,6 +590,7 @@ export default function Home() {
             setPreviewContent(data.draft_content);
             setShowPreview(true);
           }
+          void persistCurrentSession();
           break;
         }
 
@@ -479,6 +622,7 @@ export default function Home() {
           setIsWaitingApproval(false);
           setApprovalPhase(null);
           setIsGenerating(false);
+          void persistCurrentSession();
           break;
         }
 
@@ -526,6 +670,7 @@ export default function Home() {
 
     isScrolledToBottom.current = true;  // 修复 2: 用户发了 prompt, 应该跟读
     setMessages((prev) => [...prev, { role: "user", content: prompt }]);
+    void persistCurrentSession();
     setIsGenerating(true);
     wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
   };
@@ -548,6 +693,7 @@ export default function Home() {
       ? "【确认同意】同意并进入下一阶段"
       : `【拒绝反馈】反馈修改建议：${feedback}`;
     setMessages((prev) => [...prev, { role: "user", content: userActionText }]);
+    void persistCurrentSession();
 
     isScrolledToBottom.current = true;  // 修复 2: 审批完成, 用户应跟读下一阶段
     setIsWaitingApproval(false);
@@ -614,6 +760,18 @@ export default function Home() {
       {/* Header Bar */}
       <header className="h-14 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSessionSidebarOpen(v => !v)}
+            className={`p-1.5 rounded-md border transition-colors cursor-pointer ${
+              sessionSidebarOpen
+                ? "border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/30"
+                : "border-slate-200 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800"
+            }`}
+            aria-label="会话管理"
+            title="会话管理"
+          >
+            <PanelLeft className="w-4 h-4 text-slate-600 dark:text-zinc-300" />
+          </button>
           <span className="font-mono font-bold text-sm tracking-wider uppercase text-slate-800 dark:text-zinc-100">
             DOCX-Agent 交互工作台
           </span>
@@ -664,8 +822,17 @@ export default function Home() {
         </div>
       </header>
 
-      {/* 主区域: 横向 flex 父容器, 左侧 chat+input, 右侧 preview */}
+      {/* 主区域: 横向 flex 父容器, 左侧 sidebar, 中 chat+input, 右侧 preview */}
       <div className="flex-1 w-full flex overflow-hidden">
+        <SessionSidebar
+          show={sessionSidebarOpen}
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          onSelect={handleSelectSession}
+          onCreate={handleCreateSession}
+          onDelete={handleDeleteSession}
+          onClose={() => setSessionSidebarOpen(false)}
+        />
         {/* 左侧: 聊天列表 + 输入框 */}
         <div className="flex-1 flex flex-col min-w-[400px]">
           {/* Main Chat Flow Container (修复 2: onScroll 绑定) */}
