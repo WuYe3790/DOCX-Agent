@@ -721,8 +721,9 @@ export default function Home() {
                           // 拆分 transition: layout 点击展开 0 延迟, opacity/y 入场等 0.4s 避让思考框
                           transition={{
                             layout: { duration: 0.2, ease: "easeOut" },
-                            opacity: { delay: 0.4, duration: 0.2 },
-                            y: { delay: 0.4, duration: 0.2, ease: "easeOut" },
+                            // 核心修复：基础等待 0.4s（避让思考框），后续每个工具依次再额外延后 0.1s，形成丝滑的连续弹出效果
+                            opacity: { delay: 0.4 + tIdx * 0.1, duration: 0.2 },
+                            y: { delay: 0.4 + tIdx * 0.1, duration: 0.2, ease: "easeOut" },
                           }}
                         >
                           <span
