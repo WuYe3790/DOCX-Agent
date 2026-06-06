@@ -599,11 +599,12 @@ export default function Home() {
         i++;
       } else if (msg.role === "tool") {
         const tools: Message[] = [];
+        const startIndex = i;   // 核心修复: 锁死这个 toolGroup 的起始索引, id 永远不变 (避免 React 卸载重挂载触发集体重入场)
         while (i < messages.length && messages[i].role === "tool") {
           tools.push(messages[i]);
           i++;
         }
-        renderBlocks.push({ type: "toolGroup", tools, id: `toolGroup-${i}` });
+        renderBlocks.push({ type: "toolGroup", tools, id: `toolGroup-${startIndex}` });
       }
     }
   }
@@ -643,6 +644,15 @@ export default function Home() {
                 {tokenCount > 1000 ? `${(tokenCount / 1000).toFixed(0)}k` : tokenCount}
               </span>
             </div>
+          )}
+
+          {previewContent && (
+            <button
+              onClick={() => setShowPreview(v => !v)}
+              className="px-3 py-1 text-xs font-semibold border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition-colors cursor-pointer text-indigo-600 dark:text-indigo-400"
+            >
+              {showPreview ? "隐藏草稿" : "查看草稿"}
+            </button>
           )}
 
           <button
