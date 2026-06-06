@@ -169,6 +169,7 @@ class Agent:
         self.stage_called_tools = {}  # {stage_name: set(tool_names)}
         self._pending_feedback = None
         self._round_index = 0
+        self.draft_files_written: list[str] = []   # 追踪 MD_DRAFT 阶段写过的所有 .md 路径
 
     # ─── 日志 ────────────────────────────────────────────
 
@@ -390,6 +391,15 @@ class Agent:
                     yield {"type": "tool_end", "name": name, "result": result}
                     self.msg_mgr.append_tool_result(tc["id"], result)
 
+                    # 追踪 write_markdown_draft 写入的文件路径, 供 wait_approval 读取
+                    if name == "write_markdown_draft":
+                        try:
+                            result_data = json.loads(result)
+                            if result_data.get("status") == "ok" and result_data.get("markdown_path"):
+                                self.draft_files_written.append(result_data["markdown_path"])
+                        except Exception:
+                            pass   # 非致命: 解析失败不影响主流程
+
                     if self.workflow_state not in self.stage_called_tools:
                         self.stage_called_tools[self.workflow_state] = set()
                     self.stage_called_tools[self.workflow_state].add(name)
@@ -449,6 +459,7 @@ class Agent:
                 if approved:
                     self.stage_called_tools.pop(STYLE_REVIEW, None)
                     self.workflow_state = MD_DRAFT
+                    self.draft_files_written = []   # 新一轮草稿周期, 清空旧路径
                     self._append_log("状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
                     continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
                     self.msg_mgr.append_user(continue_msg)
@@ -457,8 +468,16 @@ class Agent:
                 continue
 
             if self.workflow_state == MD_DRAFT:
+                # 读取本轮所有写过的草稿文件, 用 === filename === 分隔
+                draft_parts: list[str] = []
+                for path_str in self.draft_files_written:
+                    p = Path(path_str)
+                    if p.exists():
+                        draft_parts.append(f"=== {p.name} ===\n{p.read_text(encoding='utf-8')}")
+                draft_content = "\n\n".join(draft_parts) if draft_parts else ""
+
                 self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
-                yield {"type": "wait_approval", "phase": MD_DRAFT, "content": accumulated_content}
+                yield {"type": "wait_approval", "phase": MD_DRAFT, "content": accumulated_content, "draft_content": draft_content}
 
                 feedback = self._pending_feedback
                 self._pending_feedback = None
@@ -478,6 +497,7 @@ class Agent:
                     continue_msg = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，用 markdown_to_word 的 actions 编译写入 Word，最后调用 diff_docx 验证。"
                     self.msg_mgr.append_user(continue_msg)
                 else:
+                    self.draft_files_written = []   # 修订循环, 清空旧草稿路径
                     self.msg_mgr.append_user(f"用户未通过 Markdown 草稿，修改建议：{fb_text}。请利用 write_markdown_draft 修订草稿并展示给用户。")
                 continue
 
