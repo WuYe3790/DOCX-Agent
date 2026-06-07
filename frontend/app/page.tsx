@@ -231,6 +231,12 @@ export default function Home() {
 
   // === v2: localStorage 单 key helper (只存"上次激活的 session_id", 不存 session 内容) ===
   const CURRENT_SESSION_KEY = "docx-agent:currentSessionId";
+  // v3 修复: 同时维护 currentSessionIdRef, 解决 socket.onmessage 闭包陈旧问题
+  //   socket.onmessage 在 startAgentSession 首次调用时绑定, 捕获**那一刻**的
+  //   currentSessionId (新会话下是 null); 后续 setCurrentSessionId 触发重渲染
+  //   不会重新绑定 onmessage, 闭包仍是 null → fetchDrafts 条件失败
+  //   ref 永远是最新的, 用于 onmessage 闭包内读取
+  const currentSessionIdRef = useRef<string | null>(null);
   const setCurrentSessionId = (id: string | null) => {
     if (typeof window === "undefined") return;
     try {
@@ -240,6 +246,8 @@ export default function Home() {
     } catch (e) {
       console.warn("setCurrentSessionId failed:", e);
     }
+    // 同步更新 ref (绕过闭包陷阱)
+    currentSessionIdRef.current = id;
   };
   const getCurrentSessionId = (): string | null => {
     if (typeof window === "undefined") return null;
@@ -680,9 +688,11 @@ export default function Home() {
 
           // md_draft 阶段: 自动展开右侧预览侧栏(从后端拉取结构化文件列表)
           // 拉取策略见 fetchDrafts() 注释: 一次拿所有文件, 默认选最新
-          if (data.phase === "md_draft" && currentSessionId) {
+          // v3 修复: 用 currentSessionIdRef 读最新值, 避免 onmessage 闭包陈旧
+          const sessionId = currentSessionIdRef.current;
+          if (data.phase === "md_draft" && sessionId) {
             setShowPreview(true);
-            void fetchDrafts(currentSessionId);
+            void fetchDrafts(sessionId);
           }
           break;
         }
