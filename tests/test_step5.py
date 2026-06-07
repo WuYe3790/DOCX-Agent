@@ -247,6 +247,30 @@ def test_frontend_handle_create_session_triggers_refresh():
     print("[OK] Test 13: page.tsx handleCreateSession 末尾调 refreshSessions (新建后 sidebar 立即可见)")
 
 
+# === Step 5 fixup-2: "fetch /api/sessions 404" — 前端 Next.js dev server 不知道后端路由 ===
+
+NEXT_CONFIG = FRONTEND / "next.config.ts"
+
+
+def test_next_config_has_rewrites_to_backend():
+    """Test 14 (前端): next.config.ts 配置 rewrites 把 /api/* 代理到后端 :8000
+
+    用户反馈: GET /api/sessions 404 in 102ms
+    根因: 浏览器 fetch('/api/sessions') 打到前端 :3000, Next.js dev server 不知道这个路由
+    修复: next.config.ts 加 rewrites(), 把 /api/* 代理到 BACKEND_ORIGIN (:8000)
+    """
+    content = read(NEXT_CONFIG)
+    assert "rewrites" in content, "next.config.ts 应含 rewrites() 字段"
+    # 必须有 BACKEND_ORIGIN 常量指向 :8000
+    assert "127.0.0.1:8000" in content, "next.config.ts 应配置 BACKEND_ORIGIN=http://127.0.0.1:8000"
+    # 关键路由必须被代理
+    for source in ["/api/sessions", "/api/sessions/:id", "/api/upload"]:
+        assert f"source: \"{source}\"" in content or f"source: '{source}'" in content, (
+            f"next.config.ts 应代理 {source} 到后端"
+        )
+    print("[OK] Test 14: next.config.ts rewrites 配置 /api/* -> :8000 (前端 fetch 不再 404)")
+
+
 if __name__ == "__main__":
     test_old_sessions_lib_deleted()
     test_new_session_types_lib_exists()
@@ -262,7 +286,9 @@ if __name__ == "__main__":
     test_backend_start_saves_metadata_synchronously()
     test_frontend_sidebar_open_triggers_refresh_sessions()
     test_frontend_handle_create_session_triggers_refresh()
+    # === Step 5 fixup-2: "fetch /api/sessions 404" — Next.js dev server 不知道后端路由 ===
+    test_next_config_has_rewrites_to_backend()
     print()
     print("=" * 50)
-    print("✓ All 13 Step 5 tests passed (10 base + 3 fixup)")
+    print("✓ All 14 Step 5 tests passed (10 base + 4 fixup)")
     print("=" * 50)
