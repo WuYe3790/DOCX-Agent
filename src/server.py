@@ -36,8 +36,10 @@ app.add_middleware(
 
 UPLOAD_DIR = Path("out/uploads")
 DRAFT_DIR = Path("out/drafts")
+SESSIONS_ROOT = Path("out/sessions")  # v2: 每个 session 一个目录
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 DRAFT_DIR.mkdir(parents=True, exist_ok=True)
+SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class StyleAnalyzeRequest(BaseModel):
@@ -202,7 +204,16 @@ async def download_file(path: str):
 
 @app.websocket("/api/ws/agent")
 async def ws_agent(websocket: WebSocket):
-    """WebSocket 接入层：转发事件给 Agent，接收用户反馈"""
+    """WebSocket 接入层：转发事件给 Agent，接收用户反馈
+
+    v2 startup 协议 (避坑 3: HTTP/WS 分离):
+      - 前→后:  {type: "start", prompt, docx_path}        新建会话
+      - 前→后:  {type: "resume", session_id}             恢复会话
+      - 后→前:  {type: "session_created", ...}           start 成功
+      - 后→前:  {type: "history", messages, ...}         resume 成功
+      - 后→前:  {type: "error", message}                 失败
+    现有对话事件流 (round_start/reasoning/content/tool_start/tool_end/wait_approval/done) 0 改动.
+    """
     await websocket.accept()
     adapter = LLMClientAdapter()
     model = adapter.get_model_name()
@@ -210,40 +221,51 @@ async def ws_agent(websocket: WebSocket):
     msg_mgr = MessageManager(SYSTEM_PROMPT, token_threshold=150_000)
     msg_mgr.reset()
 
+    # v2: 抽出 startup 解析 + Agent 创建, 让主循环只管"已经有一个 agent, 跑 step()"
     try:
         init_data = await websocket.receive_json()
-        if init_data.get("type") != "start":
-            await websocket.send_json({"type": "error", "message": "必须先发送 'start' 命令"})
+        init_type = init_data.get("type")
+
+        # === startup 命令分发 (3 种) ===
+        if init_type == "start":
+            agent, error_msg = await _start_new_session(init_data, adapter, model, msg_mgr)
+            if error_msg:
+                await websocket.send_json({"type": "error", "message": error_msg})
+                await websocket.close()
+                return
+
+            # 第一个 frame: session_created
+            await websocket.send_json({
+                "type": "session_created",
+                "session_id": agent.session_id,
+                "docx_path": agent.docx_path,
+                "approvalPhase": None,
+                "isWaitingApproval": False,
+            })
+
+        elif init_type == "resume":
+            agent, error_msg = await _resume_existing_session(init_data, adapter)
+            if error_msg:
+                await websocket.send_json({"type": "error", "message": error_msg})
+                await websocket.close()
+                return
+
+            # 第一个 frame: history (前端用 messages 恢复, 用 approvalPhase/isWaitingApproval 还原按钮)
+            await websocket.send_json({
+                "type": "history",
+                "session_id": agent.session_id,
+                "docxPath": agent.docx_path,
+                "messages": list(agent.msg_mgr._entries),
+                "approvalPhase": agent.workflow_state if agent.workflow_state in ("style_review", "md_draft", "word_editing") else None,
+                "isWaitingApproval": agent._pending_approval,
+            })
+
+        else:
+            await websocket.send_json({"type": "error", "message": "必须先发送 'start' 或 'resume' 命令"})
             await websocket.close()
             return
 
-        user_prompt = init_data.get("prompt")
-        docx_path = init_data.get("docx_path") or ""
-
-        if not user_prompt:
-            await websocket.send_json({"type": "error", "message": "参数 prompt 不能为空"})
-            await websocket.close()
-            return
-
-        log_path = create_log_file()
-        provider = adapter.get_provider()
-        start_config = {
-            "provider": provider,
-            "model": model,
-            "tool_count": len(TOOLS_SCHEMA),
-            "interface": "websocket_api",
-            "docx_path": docx_path
-        }
-        if provider == "deepseek":
-            start_config["thinking_type"] = adapter.get_thinking_type()
-        elif provider == "sensenova":
-            start_config["reasoning_effort"] = adapter.get_reasoning_effort()
-
-        append_log(log_path, "启动配置 (Web 终端)", start_config)
-        append_log(log_path, "用户输入", user_prompt)
-
-        msg_mgr.append_user(user_prompt)
-
+        # === heartbeat (startup 成功后启动) ===
         async def send_heartbeat():
             while True:
                 await asyncio.sleep(15)
@@ -255,14 +277,7 @@ async def ws_agent(websocket: WebSocket):
 
         heartbeat_task = asyncio.create_task(send_heartbeat())
 
-        agent = Agent(
-            system_prompt=SYSTEM_PROMPT,
-            llm_adapter=adapter,
-            msg_mgr=msg_mgr,
-            docx_path=docx_path,
-            log_path=log_path
-        )
-
+        # === 主事件循环 (现有逻辑, 0 改动) ===
         try:
             async for event in agent.step():
                 await websocket.send_json(event)
@@ -278,23 +293,97 @@ async def ws_agent(websocket: WebSocket):
             print("WebSocket 连接断开")
 
     except WebSocketDisconnect:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        print("WebSocket 连接断开")
+        print("WebSocket 连接断开 (startup 阶段)")
     except Exception as e:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
         print(f"WebSocket 异常: {str(e)}")
         try:
             await websocket.send_json({"type": "error", "message": f"系统内部异常: {str(e)}"})
         except:
             pass
+
+
+async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: str, msg_mgr: MessageManager):
+    """v2: 处理 {type: "start", prompt, docx_path}.
+
+    Returns: (agent, error_msg)
+      - 成功: (Agent, None)
+      - 失败: (None, "错误消息")
+    """
+    user_prompt = (init_data.get("prompt") or "").strip()
+    docx_path = init_data.get("docx_path") or ""
+
+    if not user_prompt:
+        return None, "参数 prompt 不能为空"
+
+    # v2: 生成 session_id + session_dir
+    session_id = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    session_dir = SESSIONS_ROOT / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = create_log_file(session_dir)
+    provider = adapter.get_provider()
+    start_config = {
+        "session_id": session_id,  # v2: 启动配置里加 session_id, 方便日志关联
+        "provider": provider,
+        "model": model,
+        "tool_count": len(TOOLS_SCHEMA),
+        "interface": "websocket_api",
+        "docx_path": docx_path,
+    }
+    if provider == "deepseek":
+        start_config["thinking_type"] = adapter.get_thinking_type()
+    elif provider == "sensenova":
+        start_config["reasoning_effort"] = adapter.get_reasoning_effort()
+
+    append_log(log_path, "启动配置 (Web 终端)", start_config)
+    append_log(log_path, "用户输入", user_prompt)
+
+    msg_mgr.append_user(user_prompt)
+
+    agent = Agent(
+        system_prompt=SYSTEM_PROMPT,
+        llm_adapter=adapter,
+        msg_mgr=msg_mgr,
+        docx_path=docx_path,
+        log_path=log_path,
+        session_id=session_id,  # v2
+        session_dir=session_dir,  # v2
+    )
+
+    return agent, None
+
+
+async def _resume_existing_session(init_data: dict, adapter: LLMClientAdapter):
+    """v2: 处理 {type: "resume", session_id}.
+
+    Returns: (agent, error_msg)
+      - 成功: (Agent, None) - 从 out/sessions/<id>/ 反序列化
+      - 失败: (None, "错误消息")
+    """
+    session_id = (init_data.get("session_id") or "").strip()
+    if not session_id:
+        return None, "resume 必须传 session_id"
+
+    session_dir = SESSIONS_ROOT / session_id
+    metadata_path = session_dir / "metadata.json"
+    if not session_dir.exists() or not metadata_path.exists():
+        return None, f"session {session_id} not found"
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    log_path = create_log_file(session_dir)  # 续写同一个 session 的 logs/
+    append_log(log_path, "恢复会话 (Web 终端)", {
+        "session_id": session_id,
+        "workflow_state": metadata.get("workflow_state"),
+    })
+
+    agent = Agent.load_from_disk(
+        session_dir=session_dir,
+        llm_adapter=adapter,
+        system_prompt=SYSTEM_PROMPT,
+        docx_path=metadata.get("docx_path", ""),
+        log_path=log_path,
+    )
+    return agent, None
 
 
 if __name__ == "__main__":

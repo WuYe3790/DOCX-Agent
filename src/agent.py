@@ -173,6 +173,7 @@ class Agent:
         self.workflow_state = STYLE_REVIEW
         self.stage_called_tools = {}  # {stage_name: set(tool_names)}
         self._pending_feedback = None
+        self._pending_approval = False  # v2: resume 时由 server 读出, 判断前端要不要展示"待审批"按钮
         self._round_index = 0
         self.draft_files_written: list[str] = []   # 追踪 MD_DRAFT 阶段写过的所有 .md 路径
         # === v2: 持久化相关 ===
@@ -226,6 +227,7 @@ class Agent:
             "model": self.llm.get_model_name() if hasattr(self.llm, "get_model_name") else "",
             "workflow_state": self.workflow_state,
             "session_complete": False,
+            "pending_approval": self._pending_approval,  # v2: resume 时供 server.py 推 isWaitingApproval
         }
 
     def _messages_dict(self) -> dict:
@@ -270,6 +272,7 @@ class Agent:
         agent.stage_called_tools = {k: set(v) for k, v in workflow["stage_called_tools"].items()}
         agent.draft_files_written = list(workflow["draft_files_written"])
         agent._round_index = workflow["round_index"]
+        agent._pending_approval = metadata.get("pending_approval", False)  # v2: 恢复"是否在等审批"标志
         return agent
 
     # ─── 日志 ────────────────────────────────────────────
@@ -294,6 +297,10 @@ class Agent:
     def on_user_feedback(self, client_res: dict):
         """WS handler 在收到用户确认后调用，存入内部状态供生成器恢复时读取"""
         self._pending_feedback = client_res
+        # v2: 用户已响应 (不论 approve/reject), 不再是"等待审批"状态
+        # (注意: step() 在 yield wait_approval 后 *恢复* 时仍可能进入新一轮审批,
+        #  那时 _checkpoint() 写盘会刷新此字段)
+        self._pending_approval = False
 
     async def step(self):
         """
@@ -544,6 +551,7 @@ class Agent:
                     continue
 
                 self._append_log("等待用户确认样式审核", {"state": self.workflow_state})
+                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
                 self._checkpoint()  # Checkpoint 4: STYLE_REVIEW 审批挂起前落盘
                 yield {"type": "wait_approval", "phase": STYLE_REVIEW, "content": accumulated_content}
                 # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
@@ -582,6 +590,7 @@ class Agent:
                 draft_content = "\n\n".join(draft_parts) if draft_parts else ""
 
                 self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
+                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
                 self._checkpoint()  # Checkpoint 5: MD_DRAFT 审批挂起前落盘
                 yield {"type": "wait_approval", "phase": MD_DRAFT, "content": accumulated_content, "draft_content": draft_content}
 
