@@ -153,53 +153,20 @@ def test_delete_session_nonexistent_idempotent():
     print("[OK] Test 6: DELETE /api/sessions/{id} 不存在 → 200 幂等")
 
 
-def test_upload_to_existing_session_writes_to_session_dir():
-    """Test 7: POST /api/upload 带 session_id + 真 session → 文件写到 session_dir/uploads/"""
-    _make_fake_session("session-upload-test")
-    file_content = b"PK\x03\x04 fake docx content"
-
-    resp = client.post(
-        "/api/upload",
-        data={"session_id": "session-upload-test"},
-        files={"file": ("实验报告.docx", io.BytesIO(file_content), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
-    )
-    assert resp.status_code == 200, f"上传失败: {resp.text}"
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["session_id"] == "session-upload-test"
-    # 文件应真写到 session_dir/uploads/
-    upload_path = Path(data["absolute_path"])
-    assert upload_path.exists()
-    assert upload_path.parent.parent == TMP_ROOT / "session-upload-test", f"文件应在 session_dir/uploads/ 下, 实际 {upload_path}"
-    assert upload_path.read_bytes() == file_content
-    print("[OK] Test 7: POST /api/upload → 文件写到 session_dir/uploads/")
-
-
-def test_upload_without_session_id_returns_422():
-    """Test 8: POST /api/upload 不带 session_id → 422 (Pydantic Form 校验)"""
+def test_upload_endpoint_removed():
+    """Test 7: POST /api/upload 已删除 (v2.1: 前端无上传入口, 避开 multipart rewrites 风险)"""
+    # 不带 session_id 也好, 任何 POST 都应 404 / 405
     file_content = b"PK\x03\x04 fake"
     resp = client.post(
         "/api/upload",
-        # 故意不传 session_id
+        data={"session_id": "any"},
         files={"file": ("test.docx", io.BytesIO(file_content), "application/octet-stream")},
     )
-    assert resp.status_code == 422, f"应 422, 实际 {resp.status_code}: {resp.text}"
-    print("[OK] Test 8: POST /api/upload 不带 session_id → 422 (Form 校验)")
-
-
-def test_upload_to_nonexistent_session_returns_404():
-    """Test 9: POST /api/upload 带不存在 session_id → 404"""
-    file_content = b"PK\x03\x04 fake"
-    resp = client.post(
-        "/api/upload",
-        data={"session_id": "session-not-yet"},
-        files={"file": ("test.docx", io.BytesIO(file_content), "application/octet-stream")},
-    )
-    assert resp.status_code == 404, f"应 404, 实际 {resp.status_code}"
-    assert "不存在" in resp.json()["detail"]
-    # 副作用: 不应创建任何 session 目录
-    assert not (TMP_ROOT / "session-not-yet").exists()
-    print("[OK] Test 9: POST /api/upload 带不存在 session_id → 404, 无副作用")
+    # 404 (路由不存在) 或 405 (方法不允许) 都算 endpoint 已删
+    assert resp.status_code in (404, 405), f"应 404/405, 实际 {resp.status_code}: {resp.text}"
+    # 关键: 没有任何 session 目录被创建 (无副作用)
+    assert not (TMP_ROOT / "any").exists(), "upload endpoint 删后不应创建 session 目录"
+    print("[OK] Test 7: POST /api/upload 已删 (前端无上传入口, 避开 multipart rewrites 风险)")
 
 
 def test_legacy_drafts_api_endpoints_removed():
@@ -222,11 +189,9 @@ if __name__ == "__main__":
     test_get_session_nonexistent_returns_404()
     test_delete_session_existing_removes_directory()
     test_delete_session_nonexistent_idempotent()
-    test_upload_to_existing_session_writes_to_session_dir()
-    test_upload_without_session_id_returns_422()
-    test_upload_to_nonexistent_session_returns_404()
+    test_upload_endpoint_removed()
     test_legacy_drafts_api_endpoints_removed()
     print()
     print("=" * 50)
-    print("✓ All 10 Step 3 tests passed")
+    print("✓ All 8 Step 3 tests passed (3 upload 测试合并为 1 个 'endpoint 已删' 验证)")
     print("=" * 50)

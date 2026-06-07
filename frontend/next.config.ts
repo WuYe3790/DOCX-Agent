@@ -17,10 +17,6 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_ORIGIN}/api/sessions/:id`,
       },
       {
-        source: "/api/upload",
-        destination: `${BACKEND_ORIGIN}/api/upload`,
-      },
-      {
         source: "/api/style/analyze",
         destination: `${BACKEND_ORIGIN}/api/style/analyze`,
       },

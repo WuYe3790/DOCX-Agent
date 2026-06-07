@@ -264,11 +264,15 @@ def test_next_config_has_rewrites_to_backend():
     # 必须有 BACKEND_ORIGIN 常量指向 :8000
     assert "127.0.0.1:8000" in content, "next.config.ts 应配置 BACKEND_ORIGIN=http://127.0.0.1:8000"
     # 关键路由必须被代理
-    for source in ["/api/sessions", "/api/sessions/:id", "/api/upload"]:
+    for source in ["/api/sessions", "/api/sessions/:id"]:
         assert f"source: \"{source}\"" in content or f"source: '{source}'" in content, (
             f"next.config.ts 应代理 {source} 到后端"
         )
-    print("[OK] Test 14: next.config.ts rewrites 配置 /api/* -> :8000 (前端 fetch 不再 404)")
+    # /api/upload 不再代理 (v2.1: 前端无上传入口, 避开 multipart rewrites 风险)
+    assert "/api/upload" not in content, (
+        "next.config.ts 不应再代理 /api/upload (v2.1: 前端无上传入口, 删 rewrite)"
+    )
+    print("[OK] Test 14: next.config.ts rewrites 配置 /api/sessions 等 -> :8000 (upload 已移除)")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -60,9 +60,11 @@ class DiffRequest(BaseModel):
     marker_prefix: Optional[str] = ""
 
 
-# === v2 HTTP 控制面: 4 个 endpoint ===
-# 避坑 3: 列表/删除/上传走 HTTP, WS 不承载 (消除 in-band 查询消息 race)
-# 设计: 这 4 个端点全是无状态, 前端用 fetch 调, sidebar 打开时拉一次, 删/上传是用户行为
+# === v2 HTTP 控制面: 3 个 endpoint (会话元数据) ===
+# 避坑 3: 列表/删除走 HTTP, WS 不承载 (消除 in-band 查询消息 race)
+# 设计: 这 3 个端点全是无状态, 前端用 fetch 调, sidebar 打开时拉一次, 删是用户行为
+# 注: /api/upload (v2 Step 3 加) 已在 v2.1 移除 — 前端无上传入口, 避开 Next.js dev server
+#     multipart rewrites 不稳的风险
 
 @app.get("/api/sessions")
 async def api_list_sessions():
@@ -140,53 +142,6 @@ async def api_delete_session(session_id: str):
         return {"status": "ok", "deleted": session_id}
     # 幂等: 不存在也返回 ok
     return {"status": "ok", "deleted": session_id, "note": "not_found"}
-
-
-@app.post("/api/upload")
-async def upload_file(
-    session_id: str = Form(...),  # v2: 必须传 session_id, 写到 out/sessions/<id>/uploads/
-    file: UploadFile = File(...),
-):
-    """上传 docx 到 out/sessions/<session_id>/uploads/ (v2: 沙箱化, 不再全局 out/uploads/)"""
-    try:
-        suffix = Path(file.filename).suffix
-        if suffix.lower() not in [".docx", ".docm"]:
-            raise HTTPException(status_code=400, detail="只支持上传 .docx / .docm 格式文件")
-
-        # v2: 校验 session_id 合法 + session 存在
-        session_dir = SESSIONS_ROOT / session_id
-        if not session_dir.exists() or not (session_dir / "metadata.json").exists():
-            raise HTTPException(status_code=404, detail=f"session {session_id} 不存在, 请先建会话再上传")
-
-        upload_dir = session_dir / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
-        # v2: 直接保留用户原文件名 (不再加 uuid 前缀, 因为 session_dir 已经是沙箱)
-        # 防覆盖: 同名文件加 .<n> 后缀
-        dest_path = upload_dir / file.filename
-        counter = 1
-        while dest_path.exists():
-            stem = Path(file.filename).stem
-            ext = Path(file.filename).suffix
-            dest_path = upload_dir / f"{stem}_{counter}{ext}"
-            counter += 1
-
-        with dest_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        return {
-            "status": "ok",
-            "filename": file.filename,
-            "saved_name": dest_path.name,
-            "absolute_path": str(dest_path.resolve()),
-            "relative_path": str(dest_path.relative_to(SESSIONS_ROOT.parent)),
-            "session_id": session_id,
-            "timestamp": datetime.now().timestamp(),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
 
 
 @app.post("/api/word/compile")
