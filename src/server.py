@@ -144,6 +144,43 @@ async def api_delete_session(session_id: str):
     return {"status": "ok", "deleted": session_id, "note": "not_found"}
 
 
+@app.get("/api/sessions/{session_id}/drafts")
+async def api_list_session_drafts(session_id: str):
+    """列出 session 的所有 MD 草稿 (元数据 + 内容). 供前端 md_draft 阶段右栏多文件 tab 用. 只读."""
+    # 1. 沙箱校验第一层: 字符黑名单 (挡掉绝大多数恶意输入, 错误消息友好)
+    if "/" in session_id or "\\" in session_id or ".." in session_id:
+        raise HTTPException(status_code=400, detail="非法 session_id (含路径分隔符)")
+    # 2. 沙箱校验第二层: 解析后绝对路径越界检查 (与 api_delete_session 同款, 纵深防御)
+    session_dir = (SESSIONS_ROOT / session_id).resolve()
+    if not session_dir.is_relative_to(SESSIONS_ROOT.resolve()):
+        raise HTTPException(status_code=400, detail="非法 session_id (越界)")
+    if not session_dir.exists():
+        return {"files": []}
+    drafts_dir = session_dir / "drafts"
+    if not drafts_dir.exists():
+        return {"files": []}
+    # 3. 遍历 *.md
+    #    排序键: (mtime, name) tuple
+    #    - 主键 mtime: LLM 按时间顺序写, 顺序对应文档区域流
+    #    - 兜底 name : 防 mtime 抖动 (Python 同进程连续 write_text + stat 在
+    #                 Windows 上 mtime 可能落到同一整数秒, 顺序会乱飘)
+    #    tuple 排序是 Python 标准库级别稳定的, 不会出现"时间一样的两文件
+    #    互相交换位置"的情况
+    files = []
+    for md_path in sorted(
+        drafts_dir.glob("*.md"),
+        key=lambda p: (p.stat().st_mtime, p.name),
+    ):
+        stat = md_path.stat()
+        files.append({
+            "name": md_path.name,
+            "content": md_path.read_text(encoding="utf-8"),
+            "size": stat.st_size,
+            "mtime": int(stat.st_mtime * 1000),  # ms, 与前端 Date.now() 对齐
+        })
+    return {"files": files}
+
+
 @app.post("/api/word/compile")
 async def compile_word(req: CompileRequest):
     try:

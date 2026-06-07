@@ -8,6 +8,7 @@ import PreviewPanel from "../components/preview-panel";
 import SessionSidebar from "../components/session-sidebar";
 // v2: 删 IndexedDB lib/sessions — 改用 HTTP fetch + WS resume (后端是 source of truth)
 import type { SessionMeta } from "../lib/session-types";
+import type { DraftFile } from "../lib/draft-types";
 
 interface Message {
   role: "user" | "assistant" | "tool";
@@ -192,8 +193,13 @@ export default function Home() {
   const [tokenCount, setTokenCount] = useState<number>(0);
 
   // === 草稿预览侧栏 (md_draft 阶段自动展开) ===
+  // 改造: 从单一 previewContent 字符串 → 多文件结构化列表
+  //   - showPreview 控制右栏滑入/滑出 (沿用)
+  //   - draftFiles 拉自后端 GET /api/sessions/{id}/drafts, 含 name/content/size/mtime
+  //   - activeFilename 用户当前选中的 tab; 默认 fetchDrafts 时取最新文件
   const [showPreview, setShowPreview] = useState<boolean>(false);
-  const [previewContent, setPreviewContent] = useState<string>("");
+  const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
+  const [activeFilename, setActiveFilename] = useState<string | null>(null);
 
   // === 会话管理 (v2: 后端持久化, 前端只维护"当前激活的 session_id") ===
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -277,6 +283,42 @@ export default function Home() {
     }
   };
 
+  // === v2: 拉取指定 session 的所有 MD 草稿 (元数据 + 内容)
+  // 触发时机:
+  //   1) 后端 wait_approval 推送 phase=md_draft 时
+  //   2) 用户主动点 Header "查看草稿" 按钮时
+  // 默认选中策略:
+  //   - 若已有 activeFilename 且仍在列表中 → 保持 (用户主动切换的不被覆盖)
+  //   - 否则取最新文件 (后端已按 mtime 升序, 末尾即最新)
+  //   - 列表为空 → 置 null
+  // 错误处理: try/catch + console.warn, UI 保持上次状态不崩
+  const fetchDrafts = async (sessionId: string) => {
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/drafts`);
+      if (res.ok) {
+        const data: { files: DraftFile[] } = await res.json();
+        setDraftFiles(data.files);
+        setActiveFilename((prev) => {
+          if (prev && data.files.some((f) => f.name === prev)) return prev;
+          const latest = data.files[data.files.length - 1];
+          return latest?.name ?? null;
+        });
+      } else {
+        console.warn("fetchDrafts failed:", res.status);
+      }
+    } catch (e) {
+      console.warn("fetchDrafts error:", e);
+    }
+  };
+
+  // === 清空草稿列表 + 选中 (切会话 / 新建 / 重置时复用)
+  // 注意: 不清 showPreview, 因为右栏可能在动画收尾中
+  const resetDrafts = () => {
+    setDraftFiles([]);
+    setActiveFilename(null);
+  };
+
   // === v2: 切会话 = 关闭旧 WS + 通过 resume 拉新 (Bug B 完整修复) ===
   const handleSelectSession = (id: string) => {
     if (id === currentSessionId) {
@@ -316,7 +358,7 @@ export default function Home() {
     setCurrentSessionId(null);
     setCurrentSessionInfo(null);
     setMessages([]);
-    setPreviewContent("");
+    resetDrafts();
     setDocxPath("");
     setSessionSidebarOpen(false);
     // v2 fix: 新建空 session (前端), 主动刷列表让 sidebar 立即看到
@@ -381,7 +423,7 @@ export default function Home() {
     setExpandedTools(new Set());
     setSelectedToolId(null);
     setShowPreview(false);
-    setPreviewContent("");
+    resetDrafts();
     setInputValue("");
     setFeedbackValue("");
     isScrolledToBottom.current = true;  // 重置, 准备跟读
@@ -399,7 +441,7 @@ export default function Home() {
 
     // 发起新会话: 重置预览侧栏状态
     setShowPreview(false);
-    setPreviewContent("");
+    resetDrafts();
 
     const socket = new WebSocket("ws://127.0.0.1:8000/api/ws/agent");
     wsRef.current = socket;
@@ -453,6 +495,11 @@ export default function Home() {
           // 状态恢复后, 不需要再等后端推内容 (history 已经是终态)
           setIsGenerating(false);
           void refreshSessions();
+          // 切到 md_draft 阶段的 session: 自动拉取其草稿文件列表
+          // (切会话时不会触发 wait_approval, 所以必须在 resume 阶段补一刀)
+          if (data.approvalPhase === "md_draft") {
+            void fetchDrafts(data.session_id);
+          }
           break;
         }
         case "round_start": {
@@ -614,10 +661,11 @@ export default function Home() {
           setIsWaitingApproval(true);
           setIsGenerating(false);
 
-          // md_draft 阶段: 自动展开右侧预览侧栏(只显示真实草稿, 不再兜底对话 content)
-          if (data.phase === "md_draft" && data.draft_content) {
-            setPreviewContent(data.draft_content);
+          // md_draft 阶段: 自动展开右侧预览侧栏(从后端拉取结构化文件列表)
+          // 拉取策略见 fetchDrafts() 注释: 一次拿所有文件, 默认选最新
+          if (data.phase === "md_draft" && currentSessionId) {
             setShowPreview(true);
+            void fetchDrafts(currentSessionId);
           }
           break;
         }
@@ -835,9 +883,16 @@ export default function Home() {
             </div>
           )}
 
-          {previewContent && (
+          {draftFiles.length > 0 && (
             <button
-              onClick={() => setShowPreview(v => !v)}
+              onClick={() => {
+                // 主动点开时: 先拉最新数据再 toggle, 避免拿到陈旧列表
+                // (例如用户在 md_draft 阶段后切到 word_editing 又切回)
+                if (!showPreview && currentSessionId) {
+                  void fetchDrafts(currentSessionId);
+                }
+                setShowPreview((v) => !v);
+              }}
               className="px-3 py-1 text-xs font-semibold border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition-colors cursor-pointer text-indigo-600 dark:text-indigo-400"
             >
               {showPreview ? "隐藏草稿" : "查看草稿"}
@@ -975,7 +1030,7 @@ export default function Home() {
                             }}
                           >
                             <span
-                              onClick={() => setSelectedToolId(isExpanded ? null : tool.id)}
+                              onClick={() => setSelectedToolId(isExpanded ? null : (tool.id ?? null))}
                               className={`inline-flex items-center gap-1 font-mono text-[11px] cursor-pointer select-none ${
                                 tool.toolStatus === "running"
                                   ? "text-blue-400 dark:text-blue-400"
@@ -1122,7 +1177,9 @@ export default function Home() {
         {/* 右侧: 预览侧栏 (内部 AnimatePresence 处理 0↔50% 动画) */}
         <PreviewPanel
           show={showPreview}
-          content={previewContent}
+          files={draftFiles}
+          activeFilename={activeFilename}
+          onSelectFile={setActiveFilename}
           onClose={() => setShowPreview(false)}
         />
       </div>
