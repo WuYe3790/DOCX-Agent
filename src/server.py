@@ -270,12 +270,16 @@ async def ws_agent(websocket: WebSocket):
                 await websocket.close()
                 return
 
+            # v3 Bug C 修复: 标记下次 step() 是 resume, yield paused 不调 LLM
+            agent._is_resume = True
+
             # 第一个 frame: history (前端用 messages 恢复, 用 approvalPhase/isWaitingApproval 还原按钮)
+            # v3 Bug B 修复: messages 用 UI 格式而非后端 OpenAI 格式
             await websocket.send_json({
                 "type": "history",
                 "session_id": agent.session_id,
                 "docxPath": agent.docx_path,
-                "messages": list(agent.msg_mgr._entries),
+                "messages": _to_ui_messages(agent.msg_mgr._entries),
                 "approvalPhase": agent.workflow_state if agent.workflow_state in ("style_review", "md_draft", "word_editing") else None,
                 "isWaitingApproval": agent._pending_approval,
             })
@@ -297,13 +301,43 @@ async def ws_agent(websocket: WebSocket):
 
         heartbeat_task = asyncio.create_task(send_heartbeat())
 
-        # === 主事件循环 (现有逻辑, 0 改动) ===
+        # === 主事件循环 (v3: start vs resume 分流) ===
         try:
-            async for event in agent.step():
-                await websocket.send_json(event)
-                if event["type"] == "wait_approval":
-                    client_res = await websocket.receive_json()
-                    agent.on_user_feedback(client_res)
+            if init_type == "resume":
+                # === resume 模式: 外层 while True + 内层 async for ===
+                # 设计:
+                #   - 内层 async for event in agent.step(): 跑一次 step()
+                #     · 第一次 _is_resume=True → yield paused → step() return
+                #       → async for 自然结束
+                #     · 第二次 (paused 后收到用户消息) → 进 while 循环 → 调 LLM
+                #   - 每次 paused 后: 等用户消息 → on_user_feedback → break
+                #   - 每次 wait_approval 后: 等用户审批 → on_user_feedback → 继续 step()
+                #   - done: return 完结
+                while True:
+                    async for event in agent.step():
+                        await websocket.send_json(event)
+                        if event["type"] == "wait_approval":
+                            client_res = await websocket.receive_json()
+                            agent.on_user_feedback(client_res)
+                            # 继续 step() 走下一步 (会再次进到 while 开头)
+                        elif event["type"] == "paused":
+                            # 等用户主动发消息 (continue / approve / feedback)
+                            client_msg = await websocket.receive_json()
+                            agent.on_user_feedback(client_msg)
+                            break  # 退出内层 async for, 回到外层 while 重新进入 step()
+                        elif event["type"] == "done":
+                            return  # 完结
+                    else:
+                        # 内层 async for 自然结束 (step() return 但没 yield 终止事件)
+                        # 防御性: 不应该到这里, 因为 paused/wait_approval/done 都会 break/return
+                        return
+            else:
+                # === start 模式: 原逻辑 0 改动 ===
+                async for event in agent.step():
+                    await websocket.send_json(event)
+                    if event["type"] == "wait_approval":
+                        client_res = await websocket.receive_json()
+                        agent.on_user_feedback(client_res)
         except WebSocketDisconnect:
             heartbeat_task.cancel()
             try:
@@ -320,6 +354,91 @@ async def ws_agent(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": f"系统内部异常: {str(e)}"})
         except:
             pass
+
+
+# === v3 Bug B 修复: 后端 OpenAI 格式 → 前端 UI 格式转换 ===
+def _to_ui_messages(entries: list[dict]) -> list[dict]:
+    """把后端 _entries (OpenAI 协议格式) 转换成前端 UI 格式 messages.
+
+    前后端 messages 数组不同构:
+      - 后端 _entries: {role, content, tool_calls, tool_call_id} (OpenAI 协议)
+      - 前端 Message:  {role, content, reasoning_content, toolName, toolArgs,
+                        toolResult, toolStatus, id} (UI 友好)
+    这个函数在 history frame 推送前调用, 把后端格式转换为前端格式.
+
+    转换规则:
+      - user                  → {role, content, id}
+      - assistant             → {role, content?, reasoning_content?, id}
+      - assistant(tool_calls) → 同上 (tool_calls 字段不暴露给 UI)
+      - tool(tool_call_id)    → {role, toolName, toolArgs, toolResult, toolStatus, id}
+                                 通过 tool_call_id 反查 assistant(tool_calls) 提取 name/args
+                                 通过 content JSON 提取 result + 判断 status
+    """
+    # 先建立 tool_call_id → {name, args, result, status} 元数据
+    tc_meta: dict = {}
+    for entry in entries:
+        if entry.get("role") == "assistant" and entry.get("tool_calls"):
+            for tc in entry["tool_calls"]:
+                tc_id = tc.get("id")
+                if not tc_id:
+                    continue
+                fn = tc.get("function") or {}
+                tc_meta[tc_id] = {
+                    "name": fn.get("name", "unknown"),
+                    "args": fn.get("arguments", ""),
+                    "result": None,
+                    "status": "running",
+                }
+        elif entry.get("role") == "tool":
+            tc_id = entry.get("tool_call_id")
+            if tc_id and tc_id in tc_meta:
+                # 解析 content JSON 提取 result + 判断 status
+                content_str = entry.get("content") or ""
+                try:
+                    result_obj = json.loads(content_str)
+                    tc_meta[tc_id]["result"] = json.dumps(result_obj, ensure_ascii=False)
+                except (json.JSONDecodeError, TypeError):
+                    # content 不是 JSON, 原样存
+                    tc_meta[tc_id]["result"] = content_str
+                # status 判断: OpenAI 协议里 tool result 通常包含 "status" 字段
+                # error detection: 包含 "error" 关键字
+                result_str = tc_meta[tc_id]["result"] or ""
+                tc_meta[tc_id]["status"] = "error" if ('"status": "error"' in result_str or '"error"' in result_str) else "success"
+
+    # 折叠成 UI messages 列表
+    ui_messages: list[dict] = []
+    for entry in entries:
+        role = entry.get("role")
+        if role == "user":
+            ui_messages.append({
+                "role": "user",
+                "content": entry.get("content", ""),
+                "id": f"user-{len(ui_messages)}",
+            })
+        elif role == "assistant":
+            msg: dict = {
+                "role": "assistant",
+                "id": f"assistant-{len(ui_messages)}",
+            }
+            if entry.get("content"):
+                msg["content"] = entry["content"]
+            if entry.get("reasoning_content"):
+                msg["reasoning_content"] = entry["reasoning_content"]
+            ui_messages.append(msg)
+        elif role == "tool":
+            tc_id = entry.get("tool_call_id")
+            meta = tc_meta.get(tc_id, {})
+            name = meta.get("name", "unknown")
+            ui_messages.append({
+                "role": "tool",
+                "toolName": name,
+                "toolArgs": meta.get("args", ""),
+                "toolResult": meta.get("result", ""),
+                "toolStatus": meta.get("status", "success"),
+                "id": f"{name}_{len(ui_messages)}",
+            })
+        # 其他 role (system 等) 不推给前端
+    return ui_messages
 
 
 async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: str, msg_mgr: MessageManager):

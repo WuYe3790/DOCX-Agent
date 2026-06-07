@@ -629,6 +629,23 @@ export default function Home() {
           break;
         }
 
+        case "paused": {
+          // v3: 切历史后后端 yield 的首个事件, 表示"已恢复状态, 等用户消息"
+          // 作用:
+          //   - setIsGenerating(false): 关闭 loading 状态
+          //   - setApprovalPhase: 还原后端的 workflow_state (style_review/md_draft/word_editing)
+          //   - setIsWaitingApproval: 决定 UI 显示"批准/拒绝"按钮还是输入框
+          // 注意: messages 已经从 history frame 加载过了, 这里不需要再处理
+          clearLiveStream();
+          setIsGenerating(false);
+          setApprovalPhase(data.phase as any);
+          setIsWaitingApproval(data.isWaitingApproval ?? false);
+          // 状态:
+          //   - isWaitingApproval=true  → 显示"批准/拒绝"按钮 (用户发 approve/reject)
+          //   - isWaitingApproval=false → 隐藏按钮, 等用户主动发新消息
+          break;
+        }
+
         case "wait_approval": {
           const txtR = liveReasoningRef.current;
           const txtC = liveContentRef.current;

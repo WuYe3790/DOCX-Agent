@@ -310,19 +310,69 @@ class Agent:
 
     # ─── 核心驱动：异步生成器 ────────────────────────────
 
-    def on_user_feedback(self, client_res: dict):
-        """WS handler 在收到用户确认后调用，存入内部状态供生成器恢复时读取"""
-        self._pending_feedback = client_res
-        # v2: 用户已响应 (不论 approve/reject), 不再是"等待审批"状态
-        # (注意: step() 在 yield wait_approval 后 *恢复* 时仍可能进入新一轮审批,
-        #  那时 _checkpoint() 写盘会刷新此字段)
-        self._pending_approval = False
+    def on_user_feedback(self, client_msg: dict):
+        """WS handler 在收到用户操作后调用, v3 路由扩展.
+
+        支持的 type:
+          - "continue": 用户在 paused 状态 (如 word_editing 中断) 发了新消息
+            → append_user 注入到 messages, 下次 step() 会带去 LLM
+          - "approve": 用户在 wait_approval 状态点审批按钮
+            → 存入 _pending_feedback, 走原 step() 内部 approved 逻辑
+          - 其他 (兼容老版本): 透传到 _pending_feedback, 由 step() 内部判断
+        """
+        msg_type = client_msg.get("type")
+        if msg_type == "continue":
+            # 用户在 paused 状态发了新 prompt → 当作新一轮对话入口
+            prompt = (client_msg.get("prompt") or "").strip()
+            if prompt:
+                self.msg_mgr.append_user(prompt)
+            # 注意: 不设 _pending_feedback 也不改 _pending_approval
+            # 下次 step() 会把这条 user 消息作为上下文带去 LLM
+        elif msg_type == "approve":
+            # 审批: 透传到 _pending_feedback, 走原 step() 内部判断
+            self._pending_feedback = client_msg
+            # v2: 不再是"等待审批"状态 (step() 恢复后会判断 approved 分支)
+            self._pending_approval = False
+        else:
+            # 兜底: 其他潜在逻辑 (如单独的 "feedback" type) — 走原逻辑
+            self._pending_feedback = client_msg
+            self._pending_approval = False
 
     async def step(self):
         """
         异步生成器：每 yield 一个事件，WS 立即发给前端。
         遇到 wait_approval 时 yield 并暂停，等 WS handler 调用 on_user_feedback() 后恢复。
+
+        v3: resume 时不立刻调 LLM
+        ── 设计 ──
+        resume 路径 (server.py 在 init_type=="resume" 时设 agent._is_resume=True):
+        step() 第一次被调 → yield 一个 paused 事件, 立即 return
+        退出生成器后, server.py 等用户消息, 收到后调 on_user_feedback
+        然后再次调 step() (此时 _is_resume 已被 self._is_resume = False 清除)
+        → 进入正常 while 循环, 调 LLM
+
+        这样:
+        - 切历史不会立即消耗 LLM 配额 (Bug C 修复)
+        - 前端拿到 paused 事件后可以根据 is_waiting_approval 决定 UI
+        - 用户主动发消息才会续跑
         """
+        # === v3: resume 早期 return — yield paused 不调 LLM ===
+        if getattr(self, "_is_resume", False):
+            self._is_resume = False  # 一次性标记, 第二次进入 while 循环
+            yield {
+                "type": "paused",
+                "phase": self.workflow_state,
+                "is_waiting_approval": self._pending_approval,
+                "reason": "resume_paused",
+            }
+            return  # 退出生成器, 等 server.py 收到用户消息后再次调用 step()
+
+        # === v3: 已完成状态 — yield done 不调 LLM ===
+        # 防止已经 done 的 session 被 resume 时又调 LLM 续跑
+        if self.workflow_state == "done":
+            yield {"type": "done", "content": ""}
+            return
+
         while True:
             self._round_index += 1
             current_tool_schemas = tool_schemas_for_state(self.workflow_state)
@@ -486,6 +536,11 @@ class Agent:
                     for idx in sorted(tool_calls_map.keys())
                 ]
                 self.msg_mgr.append_assistant(tool_calls_list, accumulated_content)
+                # v3: Bug A 防御 — 立即 checkpoint, 关闭"assistant 落盘后断网"窗口
+                # 原 _checkpoint() 在 line 498 (tool_start 之后), 中间 ~30-50ms 断网
+                # 会导致 assistant(tool_calls) 落盘但 tool result 没进, resume 时
+                # OpenAI 校验 messages 序列不完整 → 400 invalid_request_error
+                self._checkpoint()  # Checkpoint 1.5: assistant 消息已 append
 
                 for tc in tool_calls_list:
                     name = tc["function"]["name"]

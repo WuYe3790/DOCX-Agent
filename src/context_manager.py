@@ -49,23 +49,36 @@ class MessageManager:
         """
         构建发给 LLM 的消息列表。
 
-        从后往前扫，同一 target 的旧 tool call + tool result 配对删除，
-        只保留最新版本。system prompt 动态拼接 state_prompt。
+        v3 重写：两遍扫描 + assistant→tool 完整性校验。
+        ── 第一遍（正向）：建立 tool_call_id → tool_result 映射 ──
+        ── 第二遍（反向）：去重 + 完整性过滤 + content 兜底
+        防御：
+          1A-1: json.loads 防 JSONDecodeError (LLM 流式空串/截断)
+          1A-2: 没有 tool result 跟进的 tool_call 被丢弃 (OpenAI 400 防御)
+          兜底: kept_tc 空 + 有 content → 保留纯文本 assistant (不丢"我来做X"那种话)
         """
-        # ── 第一遍：从后往前扫，记录要跳过的 tool_call_id ──
+        # ── 第一遍（正向）：tool_call_id → tool_result 映射 ──
+        #
+        # 用于第二遍验证: assistant(tool_calls) 中的每条 tool_call 必须有对应
+        # tool 消息, 否则会被丢弃 (避免 OpenAI 400 invalid_request_error)
+        tool_results: dict = {}
+        for entry in self._entries:
+            if entry.get("role") == "tool":
+                tc_id = entry.get("tool_call_id")
+                if tc_id:
+                    tool_results[tc_id] = entry  # 后写覆盖前写 (key 唯一)
+
+        # ── 第二遍（反向）：去重 + 完整性过滤 + content 兜底 ──
         #
         # seen: {(tool_name, target): tool_call_id}
-        #   从后往前过程中，记录每个 (tool_name, target) 第一个遇到的 tool_call_id
-        #   （注意：从后往前扫，所以"第一个遇到"的就是最新的）
+        #   从后往前扫, 记录每个 (tool_name, target) 最新的 tool_call_id
         #
         # skip_tc_ids: set[str]
-        #   标记要跳过的 tool_call_id，这些对应的 tool result 也要跳过
-        #
-        # result_rev: list[dict]
-        #   倒序收集结果（从后往前扫，所以结果也是倒的）
+        #   标记被去重掉 (被更新的同 target 覆盖) 的旧 tool_call_id
+        #   它们对应的 tool result 也要被丢弃
         seen = {}
         skip_tc_ids = set()
-        result_rev = []
+        result_rev: list[dict] = []
 
         for entry in reversed(self._entries):
             role = entry.get("role")
@@ -87,51 +100,69 @@ class MessageManager:
                 for tc in entry["tool_calls"]:
                     tool_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+
+                    # 1A-1 修复: 防 JSONDecodeError
+                    # LLM 流式输出可能产生损坏的 arguments (空串/截断)
+                    # 降级为 {} 让 _dedup_key 返回 None → 当作非去重范围处理
+                    if isinstance(raw_args, str):
+                        try:
+                            args = json.loads(raw_args) if raw_args else {}
+                        except json.JSONDecodeError:
+                            args = {}
+                    else:
+                        args = raw_args
+
                     key = self._dedup_key(tool_name, args)
+                    tc_id = tc["id"]
+
+                    # 1A-2 修复: 验证 tool_call 有对应 tool result
+                    # 没有 tool result 跟进 → 丢弃这条 tool_call
+                    # (场景: 断网导致 assistant 落盘但 tool result 没进, 或
+                    #  旧版本残缺 messages.json 被加载)
+                    if tc_id not in tool_results:
+                        continue
 
                     if key is None:
-                        # 不在去重范围（如 ls、analyze_docx_style_samples 等），保留
+                        # 不在去重范围 (如 ls、analyze_docx_style_samples), 保留
                         kept_tc.append(tc)
                     elif key in seen:
-                        # 同一 target 已经有更新的，这个旧了，标记跳过
+                        # 同一 target 已经有更新的, 这个旧了, 标记跳过
                         skip_tc_ids.add(tc["id"])
-                        # 不加入 kept_tc
                     else:
-                        # 新的 target，第一次出现（从后往前看），保留
+                        # 新的 target, 第一次出现 (从后往前看), 保留
                         seen[key] = tc["id"]
                         kept_tc.append(tc)
 
                 if kept_tc:
-                    # 有保留的 tool_call，复制消息并替换 tool_calls 列表
+                    # 有保留的 tool_call: 复制消息 + 替换 tool_calls 列表
                     entry_copy = dict(entry)
                     entry_copy["tool_calls"] = kept_tc
                     result_rev.append(entry_copy)
-                # 如果 kept_tc 为空，说明所有 tool_call 都被标记跳过了，
-                # 此时这条 assistant 消息不加入结果
+                elif entry.get("content"):
+                    # 兜底补丁: kept_tc 空但有 content 时 (典型: 断网导致所有
+                    # tool_calls 的 tool result 都没保存)
+                    # → 保留纯文本, 清空 tool_calls 字段
+                    # → 用户能看到 LLM 至少"开口说了句话" ("我将使用工具查询...")
+                    # → 同时避免 OpenAI 看到 tool_calls=[] + 无对应 tool result 又报错
+                    entry_copy = dict(entry)
+                    entry_copy.pop("tool_calls", None)
+                    result_rev.append(entry_copy)
+                # else: kept_tc 空 + 无 content → 整条丢弃 (罕见)
                 continue
 
-            # ── tool result 消息：先记住，等第二遍处理 ──
+            # ── tool result 消息: 如果对应 tc 被去重则跳过, 否则保留 ──
             if role == "tool":
+                if entry.get("tool_call_id") in skip_tc_ids:
+                    continue
                 result_rev.append(entry)
                 continue
 
-            # ── 其他（system 等）：直接保留 ──
+            # ── 其他 (system 等): 直接保留 ──
             result_rev.append(entry)
-
-        # ── 第二遍：过滤被标记的 tool result ──
-        #
-        # 遍历第一遍结果（倒序），跳过 tool_call_id 在 skip_tc_ids 中的 tool result
-        # 这样确保 tool call 和其 tool result 配对删除
-        result = []
-        for entry in reversed(result_rev):
-            if entry.get("role") == "tool" and entry.get("tool_call_id") in skip_tc_ids:
-                continue
-            result.append(entry)
 
         # ── 拼接 system 消息 ──
         combined = f"{self._system_prompt}\n\n{state_prompt}"
-        return [{"role": "system", "content": combined}] + result
+        return [{"role": "system", "content": combined}] + list(reversed(result_rev))
 
     # ─── 去重逻辑 ────────────────────────────────────────
 
