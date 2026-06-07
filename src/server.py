@@ -1,16 +1,15 @@
 import os
 import sys
 import json
-import uuid
 import shutil
 import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 sys.path.append(str(Path(__file__).parent))
@@ -19,7 +18,6 @@ from llm_adapter import LLMClientAdapter
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 from context_manager import MessageManager
 from docx_tools.analyze_docx_style_samples import analyze_docx_style_samples
-from md_tools.parse_markdown_draft import parse_markdown_draft
 from md_tools.markdown_to_word import markdown_to_word
 from docx_tools.diff_docx import diff_docx
 from agent import Agent, SYSTEM_PROMPT, create_log_file, append_log
@@ -34,25 +32,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("out/uploads")
-DRAFT_DIR = Path("out/drafts")
-SESSIONS_ROOT = Path("out/sessions")  # v2: 每个 session 一个目录
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-DRAFT_DIR.mkdir(parents=True, exist_ok=True)
+SESSIONS_ROOT = Path("out/sessions")  # v2: 每个 session 一个目录 (含 drafts/ / style_profiles/ / uploads/ 子目录)
 SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+# === v2 Pydantic models: 删 ParseDraftRequest / SaveDraftRequest (草稿文件在 session_dir/drafts/, 不再走全局) ===
+# === v2 新增: UploadRequest 接受 session_id, 文件写到 out/sessions/<session_id>/uploads/ ===
 
 
 class StyleAnalyzeRequest(BaseModel):
     docx_path: str
-
-
-class ParseDraftRequest(BaseModel):
-    markdown_content: str
-
-
-class SaveDraftRequest(BaseModel):
-    filename: str
-    content: str
+    session_id: Optional[str] = None  # v2: 可选 — 指定 session_id 时, style profile 写到 session_dir/style_profiles/
 
 
 class CompileRequest(BaseModel):
@@ -70,16 +60,116 @@ class DiffRequest(BaseModel):
     marker_prefix: Optional[str] = ""
 
 
+# === v2 HTTP 控制面: 4 个 endpoint ===
+# 避坑 3: 列表/删除/上传走 HTTP, WS 不承载 (消除 in-band 查询消息 race)
+# 设计: 这 4 个端点全是无状态, 前端用 fetch 调, sidebar 打开时拉一次, 删/上传是用户行为
+
+@app.get("/api/sessions")
+async def api_list_sessions():
+    """列出所有 session (按 updatedAt 倒序). 前端 sidebar 打开时调用."""
+    sessions = []
+    if not SESSIONS_ROOT.exists():
+        return sessions
+    for d in SESSIONS_ROOT.iterdir():
+        if not d.is_dir() or not (d / "metadata.json").exists():
+            continue
+        try:
+            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+            msg_path = d / "messages.json"
+            msg_count = 0
+            if msg_path.exists():
+                msgs = json.loads(msg_path.read_text(encoding="utf-8"))
+                msg_count = len(msgs.get("entries", []))
+            # updated_at 解析: 失败时降级为 0 (排到最前)
+            updated_ts = 0
+            try:
+                updated_ts = int(datetime.fromisoformat(meta["updated_at"]).timestamp() * 1000)
+            except (KeyError, ValueError):
+                pass
+            created_ts = updated_ts  # 默认同 updated
+            try:
+                created_ts = int(datetime.fromisoformat(meta.get("created_at", meta["updated_at"])).timestamp() * 1000)
+            except (KeyError, ValueError):
+                pass
+            sessions.append({
+                "id": meta["session_id"],
+                "title": meta.get("title", "新会话"),
+                "createdAt": created_ts,
+                "updatedAt": updated_ts,
+                "messageCount": msg_count,
+                "workflowState": meta.get("workflow_state"),
+            })
+        except (json.JSONDecodeError, KeyError, OSError):
+            # 跳过损坏的 session 目录 (不阻塞整个列表)
+            continue
+    # 按 updatedAt 倒序
+    sessions.sort(key=lambda s: s["updatedAt"], reverse=True)
+    return sessions
+
+
+@app.get("/api/sessions/{session_id}")
+async def api_get_session(session_id: str):
+    """拉单个 session 完整快照 (含 messages). 供前端在 WS resume 之前可选预热."""
+    session_dir = SESSIONS_ROOT / session_id
+    metadata_path = session_dir / "metadata.json"
+    if not session_dir.exists() or not metadata_path.exists():
+        raise HTTPException(status_code=404, detail=f"session {session_id} not found")
+    try:
+        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+        msgs = json.loads((session_dir / "messages.json").read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise HTTPException(status_code=500, detail=f"session 文件读取失败: {e}")
+    return {
+        "id": meta["session_id"],
+        "title": meta.get("title", "新会话"),
+        "docxPath": meta.get("docx_path", ""),
+        "messages": msgs.get("entries", []),
+        "approvalPhase": meta.get("workflow_state") if meta.get("workflow_state") in ("style_review", "md_draft", "word_editing") else None,
+        "isWaitingApproval": meta.get("pending_approval", False),
+    }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_session(session_id: str):
+    """级联删除整个 session 目录 (含 drafts/ / style_profiles/ / uploads/ / logs/ / 3 JSON)."""
+    session_dir = SESSIONS_ROOT / session_id
+    if session_dir.exists():
+        if not session_dir.is_relative_to(SESSIONS_ROOT.resolve()):
+            raise HTTPException(status_code=400, detail="非法 session_id (越界)")
+        shutil.rmtree(session_dir)
+        return {"status": "ok", "deleted": session_id}
+    # 幂等: 不存在也返回 ok
+    return {"status": "ok", "deleted": session_id, "note": "not_found"}
+
+
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    session_id: str = Form(...),  # v2: 必须传 session_id, 写到 out/sessions/<id>/uploads/
+    file: UploadFile = File(...),
+):
+    """上传 docx 到 out/sessions/<session_id>/uploads/ (v2: 沙箱化, 不再全局 out/uploads/)"""
     try:
         suffix = Path(file.filename).suffix
         if suffix.lower() not in [".docx", ".docm"]:
             raise HTTPException(status_code=400, detail="只支持上传 .docx / .docm 格式文件")
 
-        file_id = str(uuid.uuid4())[:8]
-        filename = f"{Path(file.filename).stem}_{file_id}{suffix}"
-        dest_path = UPLOAD_DIR / filename
+        # v2: 校验 session_id 合法 + session 存在
+        session_dir = SESSIONS_ROOT / session_id
+        if not session_dir.exists() or not (session_dir / "metadata.json").exists():
+            raise HTTPException(status_code=404, detail=f"session {session_id} 不存在, 请先建会话再上传")
+
+        upload_dir = session_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        # v2: 直接保留用户原文件名 (不再加 uuid 前缀, 因为 session_dir 已经是沙箱)
+        # 防覆盖: 同名文件加 .<n> 后缀
+        dest_path = upload_dir / file.filename
+        counter = 1
+        while dest_path.exists():
+            stem = Path(file.filename).stem
+            ext = Path(file.filename).suffix
+            dest_path = upload_dir / f"{stem}_{counter}{ext}"
+            counter += 1
 
         with dest_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -87,78 +177,16 @@ async def upload_file(file: UploadFile = File(...)):
         return {
             "status": "ok",
             "filename": file.filename,
-            "saved_name": filename,
+            "saved_name": dest_path.name,
             "absolute_path": str(dest_path.resolve()),
-            "relative_path": f"out/uploads/{filename}",
-            "timestamp": datetime.now().timestamp()
+            "relative_path": str(dest_path.relative_to(SESSIONS_ROOT.parent)),
+            "session_id": session_id,
+            "timestamp": datetime.now().timestamp(),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
-
-
-@app.post("/api/style/analyze")
-async def analyze_style(req: StyleAnalyzeRequest):
-    try:
-        if not Path(req.docx_path).exists():
-            raise HTTPException(status_code=404, detail="指定路径的文档不存在")
-        result_json = analyze_docx_style_samples(req.docx_path)
-        return json.loads(result_json)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/draft/parse")
-async def parse_draft(req: ParseDraftRequest):
-    try:
-        temp_draft_path = DRAFT_DIR / "temp_draft.md"
-        temp_draft_path.write_text(req.markdown_content, encoding="utf-8")
-        result_json = parse_markdown_draft(str(temp_draft_path))
-        return json.loads(result_json)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/drafts/list")
-async def list_drafts(since: Optional[float] = None):
-    try:
-        files = []
-        for file in DRAFT_DIR.glob("*.md"):
-            if file.name != "temp_draft.md":
-                if since is not None:
-                    if file.stat().st_mtime < (since - 5.0):
-                        continue
-                files.append(file.name)
-        return {"status": "ok", "files": sorted(files)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/drafts/read")
-async def read_draft(filename: str):
-    try:
-        safe_path = (DRAFT_DIR / filename).resolve()
-        if not safe_path.is_relative_to(DRAFT_DIR.resolve()):
-            raise HTTPException(status_code=400, detail="非法路径访问")
-        if not safe_path.exists():
-            raise HTTPException(status_code=404, detail="草稿文件不存在")
-        content = safe_path.read_text(encoding="utf-8")
-        return {"status": "ok", "filename": filename, "content": content}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/drafts/save")
-async def save_draft(req: SaveDraftRequest):
-    try:
-        safe_path = (DRAFT_DIR / req.filename).resolve()
-        if not safe_path.is_relative_to(DRAFT_DIR.resolve()):
-            raise HTTPException(status_code=400, detail="非法路径访问")
-        safe_path.write_text(req.content, encoding="utf-8")
-        return {"status": "ok", "message": "保存成功"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
 
 
 @app.post("/api/word/compile")
