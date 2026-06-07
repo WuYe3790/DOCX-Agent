@@ -378,6 +378,10 @@ async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: 
         session_dir=session_dir,  # v2
     )
 
+    # v2 fix: Agent 创建后**立即**同步写盘, 让 /api/sessions 立即能看到这个 session
+    # (否则要等 _checkpoint() fire-and-forget 在 round_start 后异步落盘, LLM 慢的话几秒到十几秒延迟)
+    agent.save_to_disk()
+
     return agent, None
 
 

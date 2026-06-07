@@ -329,6 +329,8 @@ export default function Home() {
     setPreviewContent("");
     setDocxPath("");
     setSessionSidebarOpen(false);
+    // v2 fix: 新建空 session (前端), 主动刷列表让 sidebar 立即看到
+    void refreshSessions();
   };
 
   // === v2: 删除 = HTTP DELETE + 重新拉列表 + 切到下一个 / 留空 ===
@@ -794,7 +796,13 @@ export default function Home() {
       <header className="h-14 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setSessionSidebarOpen(v => !v)}
+            onClick={() => {
+              const nextOpen = !sessionSidebarOpen;
+              setSessionSidebarOpen(nextOpen);
+              // v2 fix: sidebar 打开时**懒加载**拉列表, 保证 UI 总是看到最新 session
+              // (用户发完消息后可能隔几秒再开 sidebar, 这期间后端已落盘的 session 不会自动更新到 state)
+              if (nextOpen) void refreshSessions();
+            }}
             className={`p-1.5 rounded-md border transition-colors cursor-pointer ${
               sessionSidebarOpen
                 ? "border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/30"

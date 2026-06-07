@@ -157,6 +157,96 @@ def test_no_persist_current_session_in_session_sidebar():
     print("[OK] Test 10: session-sidebar.tsx 无 persistCurrentSession 引用")
 
 
+# === Step 5 fixup: "用户发完消息不点 sidebar 也看不到" bug 修复 ===
+
+def test_backend_start_saves_metadata_synchronously():
+    """Test 11 (后端): WS start 后**立即** GET /api/sessions 能看到新 session (修 fixup 1)
+
+    修复前: session_created 在 _start_new_session 末尾立即发, 但 metadata.json 要等
+    _checkpoint() fire-and-forget 异步落盘 (round_start 时). LLM 慢的话几秒到十几秒延迟,
+    此时 GET /api/sessions 拉不到这个 session.
+
+    修复: _start_new_session 里 Agent 创建后立即 agent.save_to_disk() 同步写盘.
+    """
+    import time
+    from fastapi.testclient import TestClient
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT / "src"))
+    from fastapi.testclient import TestClient as _TestClient
+    import server as _server
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    # 隔离: SESSIONS_ROOT 重定向到 tmpdir
+    _tmp = Path(_tempfile.mkdtemp(prefix="step5_fixup_"))
+    _server.SESSIONS_ROOT = _tmp
+    _tmp.mkdir(parents=True, exist_ok=True)
+    _client = _TestClient(_server.app)
+
+    # 1. WS start 一个新 session
+    with _client.websocket_connect("/api/ws/agent") as ws:
+        ws.send_json({"type": "start", "prompt": "测试", "docx_path": ""})
+        frame = ws.receive_json()
+        assert frame["type"] == "session_created"
+        new_session_id = frame["session_id"]
+
+    # 2. **不 sleep**, 立即 GET /api/sessions — 应该立即看到新 session
+    resp = _client.get("/api/sessions")
+    assert resp.status_code == 200
+    sessions = resp.json()
+    session_ids = [s["id"] for s in sessions]
+    assert new_session_id in session_ids, (
+        f"start 后 GET /api/sessions 应立即看到 {new_session_id}, 实际: {session_ids}. "
+        f"这说明 _start_new_session 没同步写盘, metadata.json 还没落."
+    )
+    _shutil.rmtree(_tmp)
+    print("[OK] Test 11: WS start 后**立即** GET /api/sessions 能看到新 session (同步写盘验证)")
+
+
+def test_frontend_sidebar_open_triggers_refresh_sessions():
+    """Test 12 (前端): sidebar 打开按钮 onClick 调 refreshSessions (修 fixup 2)
+
+    修复前: onClick={() => setSessionSidebarOpen(v => !v)} 只切 state, 不拉列表.
+    用户在发完消息后**隔几秒**才开 sidebar, 中间后端落盘的 session 不会自动更新到 state.
+    修复: onClick 内 nextOpen=true 时 void refreshSessions().
+    """
+    content = read(APP_PAGE)
+    # 验证 onClick 内 nextOpen 判断 + refreshSessions 调用
+    sidebar_open_block = re.search(
+        r"onClick\s*=\s*\{\s*\(\)\s*=>\s*\{[^}]*setSessionSidebarOpen[^}]*nextOpen[^}]*refreshSessions",
+        content,
+    )
+    assert sidebar_open_block, (
+        "page.tsx sidebar 打开按钮 onClick 应在 nextOpen=true 时调 refreshSessions() (v2 fix)"
+    )
+    print("[OK] Test 12: page.tsx sidebar 打开按钮 onClick 触发 refreshSessions() (懒加载)")
+
+
+def test_frontend_handle_create_session_triggers_refresh():
+    """Test 13 (前端): handleCreateSession 末尾调 refreshSessions (修 fixup 3)
+
+    修复前: 用户点 sidebar 的"新建对话"按钮后, 下次开 sidebar 才能看到新 session.
+    修复: handleCreateSession 末尾 void refreshSessions().
+    """
+    content = read(APP_PAGE)
+    # 找 handleCreateSession 函数体, 验证末尾有 refreshSessions
+    handle_create_block = re.search(
+        r"const handleCreateSession\s*=\s*[^=]*=>\s*\{(.*?)\n\s*\};",
+        content,
+        re.DOTALL,
+    )
+    assert handle_create_block, "page.tsx 应有 handleCreateSession 函数"
+    body = handle_create_block.group(1)
+    assert "refreshSessions" in body, (
+        "handleCreateSession 末尾应调 refreshSessions() (v2 fix: 新建后 sidebar 立即可见)"
+    )
+    # 验证在函数末尾 (refreshSessions 在 setSessionSidebarOpen(false) 之后)
+    assert body.rfind("refreshSessions") > body.rfind("setSessionSidebarOpen(false)"), (
+        "refreshSessions 应在 handleCreateSession 末尾 (在 setSessionSidebarOpen 之后)"
+    )
+    print("[OK] Test 13: page.tsx handleCreateSession 末尾调 refreshSessions (新建后 sidebar 立即可见)")
+
+
 if __name__ == "__main__":
     test_old_sessions_lib_deleted()
     test_new_session_types_lib_exists()
@@ -168,7 +258,11 @@ if __name__ == "__main__":
     test_session_sidebar_uses_shared_types()
     test_no_indexeddb_in_frontend_source()
     test_no_persist_current_session_in_session_sidebar()
+    # === Step 5 fixup: "用户发完消息不点 sidebar 也看不到" bug 修复 ===
+    test_backend_start_saves_metadata_synchronously()
+    test_frontend_sidebar_open_triggers_refresh_sessions()
+    test_frontend_handle_create_session_triggers_refresh()
     print()
     print("=" * 50)
-    print("✓ All 10 Step 5 static contract tests passed")
+    print("✓ All 13 Step 5 tests passed (10 base + 3 fixup)")
     print("=" * 50)
