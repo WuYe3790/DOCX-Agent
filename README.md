@@ -94,8 +94,9 @@ Fire-and-forget 后台任务，**不阻塞 stream**：
 
 - Python 3.10+
 - Node.js 18+
-- 后端 Python 依赖 (`requirements.txt`)：`fastapi` / `uvicorn` / `websockets`
-- 隐式依赖（`import` 但 `requirements.txt` 未列）：`lxml` / `openai` / `markdown-it-py` / `python-multipart`（如缺失 `pip install` 一下）
+- 后端 Python 依赖（完整见 `requirements.txt`）：
+  - **核心**：`openai` / `lxml` / `markdown-it-py` / `Pillow`
+  - **v2 服务**：`fastapi` / `uvicorn` / `websockets` / `pydantic`
 
 ### 配置
 
