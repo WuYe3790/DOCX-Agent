@@ -6,17 +6,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 import PreviewPanel from "../components/preview-panel";
 import SessionSidebar from "../components/session-sidebar";
-import {
-  listSessions,
-  getSession,
-  createSession,
-  updateSession,
-  deleteSession,
-  getCurrentSessionId,
-  setCurrentSessionId,
-  type SessionMeta,
-  type Session,
-} from "../lib/sessions";
+// v2: 删 IndexedDB lib/sessions — 改用 HTTP fetch + WS resume (后端是 source of truth)
+import type { SessionMeta } from "../lib/session-types";
 
 interface Message {
   role: "user" | "assistant" | "tool";
@@ -204,10 +195,16 @@ export default function Home() {
   const [showPreview, setShowPreview] = useState<boolean>(false);
   const [previewContent, setPreviewContent] = useState<string>("");
 
-  // === 会话管理 (IndexedDB 持久化) ===
+  // === 会话管理 (v2: 后端持久化, 前端只维护"当前激活的 session_id") ===
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(null);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState<boolean>(false);
+  const [currentSessionInfo, setCurrentSessionInfo] = useState<{
+    id: string;
+    docxPath: string;
+    approvalPhase: "style_review" | "md_draft" | "word_editing" | null;
+    isWaitingApproval: boolean;
+  } | null>(null);
 
   // === 实时流状态 (RAF 节流) ===
   const [liveReasoning, setLiveReasoning] = useState<string>("");
@@ -226,95 +223,88 @@ export default function Home() {
   // === 滚动意图侦测 (修复 2) ===
   const isScrolledToBottom = useRef<boolean>(true);
 
-  // === 会话管理: 启动时加载 IndexedDB ===
+  // === v2: localStorage 单 key helper (只存"上次激活的 session_id", 不存 session 内容) ===
+  const CURRENT_SESSION_KEY = "docx-agent:currentSessionId";
+  const setCurrentSessionId = (id: string | null) => {
+    if (typeof window === "undefined") return;
+    try {
+      if (id === null) localStorage.removeItem(CURRENT_SESSION_KEY);
+      else localStorage.setItem(CURRENT_SESSION_KEY, id);
+      setCurrentSessionIdState(id);
+    } catch (e) {
+      console.warn("setCurrentSessionId failed:", e);
+    }
+  };
+  const getCurrentSessionId = (): string | null => {
+    if (typeof window === "undefined") return null;
+    try { return localStorage.getItem(CURRENT_SESSION_KEY); }
+    catch { return null; }
+  };
+
+  // === v2: 启动时 HTTP 拉列表 + 选 lastSessionId resume / 首个 session resume / 无则建空 ===
   useEffect(() => {
     (async () => {
-      const list = await listSessions();
-      setSessions(list);
-      const cid = getCurrentSessionId();
-      const targetId = cid && list.find((s) => s.id === cid)
-        ? cid
-        : list.length > 0
-        ? list[0].id
-        : null;
-      if (targetId) {
-        await loadSessionIntoState(targetId);
-      } else {
-        await handleCreateSession();
+      try {
+        const res = await fetch("/api/sessions");
+        if (!res.ok) {
+          console.warn("fetch /api/sessions failed:", res.status);
+          setSessions([]);
+        } else {
+          const list: SessionMeta[] = await res.json();
+          setSessions(list);
+          const lastId = getCurrentSessionId();
+          const targetId = lastId && list.find((s) => s.id === lastId)
+            ? lastId
+            : list.length > 0
+            ? list[0].id
+            : null;
+          if (targetId) {
+            // v2: 通过 WS resume 重建上下文 (后端 Agent.load_from_disk)
+            startAgentSession("", "", targetId);
+          } else {
+            // 无 session: 留空 UI, 等用户发首条消息时再走 start
+            setMessages([]);
+          }
+        }
+      } catch (e) {
+        console.warn("session list fetch error:", e);
+        setSessions([]);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // === 关键: 立即保存当前 session (消息完整时调用, 不 debounce, 不 useEffect 监听) ===
-  const persistCurrentSession = async (overrides?: {
-    messages?: Message[];
-    previewContent?: string;
-    docxPath?: string;
-    approvalPhase?: "style_review" | "md_draft" | "word_editing" | null;
-    isWaitingApproval?: boolean;
-  }) => {
-    if (!currentSessionId) return;
-    const update = {
-      messages: overrides?.messages ?? messages,
-      previewContent: overrides?.previewContent ?? previewContent,
-      docxPath: overrides?.docxPath ?? docxPath,
-      approvalPhase: overrides?.approvalPhase ?? approvalPhase,
-      isWaitingApproval: overrides?.isWaitingApproval ?? isWaitingApproval,
-      updatedAt: Date.now(),
-    };
-    await updateSession(currentSessionId, update);
-    // 同步元数据给 sidebar (实时更新 messageCount / updatedAt)
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === currentSessionId
-          ? { ...s, updatedAt: update.updatedAt, messageCount: update.messages.length }
-          : s
-      )
-    );
+  // === v2: 重新拉列表 (删除/创建后用) ===
+  const refreshSessions = async () => {
+    try {
+      const res = await fetch("/api/sessions");
+      if (res.ok) {
+        const list: SessionMeta[] = await res.json();
+        setSessions(list);
+      }
+    } catch (e) {
+      console.warn("refreshSessions failed:", e);
+    }
   };
 
-  // === 加载完整 session 到 React state ===
-  const loadSessionIntoState = async (id: string) => {
-    const session = await getSession(id);
-    if (!session) return;
-    setMessages(session.messages);
-    setPreviewContent(session.previewContent);
-    setDocxPath(session.docxPath);
-    setApprovalPhase(session.approvalPhase ?? null);
-    setIsWaitingApproval(session.isWaitingApproval ?? false);
-    setCurrentSessionId(id);
-    setCurrentSessionIdHelper(id);
-  };
-
-  // === 内部: localStorage helper 别名 (避免跟 import 重名) ===
-  const setCurrentSessionIdHelper = (id: string | null) => setCurrentSessionId(id);
-
-  // === Handler: 切换会话 ===
-  const handleSelectSession = async (id: string) => {
+  // === v2: 切会话 = 关闭旧 WS + 通过 resume 拉新 (Bug B 完整修复) ===
+  const handleSelectSession = (id: string) => {
     if (id === currentSessionId) {
       setSessionSidebarOpen(false);
       return;
     }
-    // 1. 先保存当前 (防丢)
-    await persistCurrentSession();
-    // 2. 关 WS
+    // 1. 关旧 WS
     if (wsRef.current) {
       wsRef.current.close();
+      wsRef.current = null;
     }
-    // 3. 加载新 session 到 React state
-    await loadSessionIntoState(id);
-    // 4. 关闭 sidebar
+    // 2. WS resume 重建 (后端发 history frame, onmessage 处理覆盖 state)
+    startAgentSession("", "", id);
     setSessionSidebarOpen(false);
-    // 5. 如果新 session 有 docxPath, 重启 WS
-    if (docxPath) {
-      // 用 docxPath 启动新 session (不立即发消息)
-      // 这里简化: 仅记录 docxPath, 等用户输入再启动
-    }
   };
 
-  // === Handler: 新建会话 ===
-  const handleCreateSession = async () => {
+  // === v2: 新建会话 = 清空前端 state + 留空等用户发首条消息 (发时走 start) ===
+  const handleCreateSession = () => {
     // Bug A 修复: 重置所有 approval + UI 状态, 避免旧 session 的状态泄漏到新 session
     setIsWaitingApproval(false);
     setApprovalPhase(null);
@@ -327,37 +317,37 @@ export default function Home() {
     setExpandedTools(new Set());
     setSelectedToolId(null);
 
-    const newSession = await createSession({ title: "新会话" });
-    setSessions((prev) => [
-      ...prev,
-      {
-        id: newSession.id,
-        title: newSession.title,
-        createdAt: newSession.createdAt,
-        updatedAt: newSession.updatedAt,
-        messageCount: 0,
-      },
-    ]);
-    setCurrentSessionId(newSession.id);
-    setCurrentSessionIdHelper(newSession.id);
+    // 关旧 WS (如果有)
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    // 清 currentSessionId (但不主动 start — 等用户发消息时 startAgentSession 走 start)
+    setCurrentSessionId(null);
+    setCurrentSessionInfo(null);
     setMessages([]);
     setPreviewContent("");
     setDocxPath("");
     setSessionSidebarOpen(false);
   };
 
-  // === Handler: 删除会话 ===
+  // === v2: 删除 = HTTP DELETE + 重新拉列表 + 切到下一个 / 留空 ===
   const handleDeleteSession = async (id: string) => {
     if (!confirm("确认删除该会话? 此操作不可恢复。")) return;
-    await deleteSession(id);
-    setSessions((prev) => prev.filter((s) => s.id !== id));
+    try {
+      const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+      if (!res.ok) console.warn("DELETE session failed:", res.status);
+    } catch (e) {
+      console.warn("delete session error:", e);
+    }
+    await refreshSessions();
     if (id === currentSessionId) {
-      // 删的是当前, 切到下一个或建空
+      // 删的是当前, 切到下一个或留空
       const remaining = sessions.filter((s) => s.id !== id);
       if (remaining.length > 0) {
-        await handleSelectSession(remaining[0].id);
+        handleSelectSession(remaining[0].id);
       } else {
-        await handleCreateSession();
+        handleCreateSession();
       }
     }
   };
@@ -405,11 +395,12 @@ export default function Home() {
     isScrolledToBottom.current = true;  // 重置, 准备跟读
     if (wsRef.current) {
       wsRef.current.close();
+      wsRef.current = null;
     }
-    await persistCurrentSession();
+    // v2: 后端自动持久化, 不再前端 persist
   };
 
-  const startAgentSession = (initialPrompt: string, path: string) => {
+  const startAgentSession = (initialPrompt: string, path: string, resumeSessionId?: string) => {
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -417,29 +408,61 @@ export default function Home() {
     // 发起新会话: 重置预览侧栏状态
     setShowPreview(false);
     setPreviewContent("");
-    void persistCurrentSession();  // 持久化空 preview 状态
 
     const socket = new WebSocket("ws://127.0.0.1:8000/api/ws/agent");
     wsRef.current = socket;
 
     socket.onopen = () => {
       setIsConnected(true);
-      setIsGenerating(true);
-      socket.send(
-        JSON.stringify({
-          type: "start",
-          prompt: initialPrompt,
-          docx_path: path,
-        })
-      );
-      setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
-      void persistCurrentSession();
+      if (resumeSessionId) {
+        // v2: resume 已有 session (后端 Agent.load_from_disk)
+        socket.send(JSON.stringify({ type: "resume", session_id: resumeSessionId }));
+        // 注意: 不立即 push user message, 等 history frame 回来再覆盖
+      } else {
+        // v2: start 新 session (后端生成 session_id)
+        setIsGenerating(true);
+        socket.send(JSON.stringify({ type: "start", prompt: initialPrompt, docx_path: path }));
+        if (initialPrompt) {
+          setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
+        }
+      }
     };
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
       switch (data.type) {
+        case "session_created": {
+          // v2: 后端生成 session_id, 第一个 frame 推过来
+          setCurrentSessionId(data.session_id);
+          setCurrentSessionInfo({
+            id: data.session_id,
+            docxPath: data.docx_path || "",
+            approvalPhase: data.approvalPhase ?? null,
+            isWaitingApproval: data.isWaitingApproval ?? false,
+          });
+          // 异步刷新 sidebar 列表 (拉新 session 进来)
+          void refreshSessions();
+          break;
+        }
+        case "history": {
+          // v2: resume 成功, 后端 dump 完整 history
+          setCurrentSessionId(data.session_id);
+          setCurrentSessionInfo({
+            id: data.session_id,
+            docxPath: data.docxPath || "",
+            approvalPhase: data.approvalPhase ?? null,
+            isWaitingApproval: data.isWaitingApproval ?? false,
+          });
+          setMessages(data.messages || []);
+          setDocxPath(data.docxPath || "");
+          setApprovalPhase(data.approvalPhase ?? null);
+          setIsWaitingApproval(data.isWaitingApproval ?? false);
+          // 状态恢复后, 不需要再等后端推内容 (history 已经是终态)
+          setIsGenerating(false);
+          void refreshSessions();
+          break;
+        }
         case "round_start": {
           // 修复 B: 先把当前 ref 里的内容固化为 messages (防止"被后端打回"时数据丢失)
           // 后端在 LLM 漏调/错调工具时会丢弃上一轮 reasoning+content, 直接发 round_start
@@ -472,7 +495,6 @@ export default function Home() {
           if (data.token_count !== undefined) {
             setTokenCount(data.token_count);
           }
-          void persistCurrentSession();
           break;
         }
 
@@ -520,7 +542,6 @@ export default function Home() {
             ]);
           }
           clearLiveStream();
-          void persistCurrentSession();
           break;
         }
 
@@ -550,7 +571,6 @@ export default function Home() {
               id: data.name + "_" + crypto.randomUUID(),
             },
           ]);
-          void persistCurrentSession();
           break;
         }
 
@@ -567,7 +587,6 @@ export default function Home() {
               return msg;
             })
           );
-          void persistCurrentSession();
           break;
         }
 
@@ -608,7 +627,6 @@ export default function Home() {
             setPreviewContent(data.draft_content);
             setShowPreview(true);
           }
-          void persistCurrentSession();
           break;
         }
 
@@ -640,7 +658,6 @@ export default function Home() {
           setIsWaitingApproval(false);
           setApprovalPhase(null);
           setIsGenerating(false);
-          void persistCurrentSession();
           break;
         }
 
@@ -688,7 +705,6 @@ export default function Home() {
 
     isScrolledToBottom.current = true;  // 修复 2: 用户发了 prompt, 应该跟读
     setMessages((prev) => [...prev, { role: "user", content: prompt }]);
-    void persistCurrentSession();
     setIsGenerating(true);
     wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
   };
@@ -711,7 +727,6 @@ export default function Home() {
       ? "【确认同意】同意并进入下一阶段"
       : `【拒绝反馈】反馈修改建议：${feedback}`;
     setMessages((prev) => [...prev, { role: "user", content: userActionText }]);
-    void persistCurrentSession();
 
     isScrolledToBottom.current = true;  // 修复 2: 审批完成, 用户应跟读下一阶段
     setIsWaitingApproval(false);

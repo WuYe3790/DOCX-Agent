@@ -2,15 +2,10 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { PanelLeft, Plus, Trash2, FileText, X } from "lucide-react";
+// v2: SessionMeta 改从共享 lib/session-types.ts import (避免跟 lib/sessions 耦合)
+import type { SessionMeta } from "../lib/session-types";
 
-// 跟 sessions.ts 的 SessionMeta 类型一致
-export interface SessionMeta {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  messageCount: number;
-}
+export type { SessionMeta };
 
 interface SessionSidebarProps {
   show: boolean;
