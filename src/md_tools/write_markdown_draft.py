@@ -1,10 +1,18 @@
+from pathlib import Path
+
 from .common import draft_path, json_result
 
 
-def write_markdown_draft(output_path: str, content: str, overwrite: bool = True) -> str:
-    """把模型生成的 Markdown 草稿写入 out/drafts。"""
+def write_markdown_draft(
+    session_id: str,  # v2: 后端 dispatcher 隐式注入, LLM 不可见 (避坑 1)
+    output_path: str,
+    content: str,
+    overwrite: bool = True,
+) -> str:
+    """v2: 把模型生成的 Markdown 草稿写入 session_dir/drafts/ (沙箱化)."""
     try:
-        target = draft_path(output_path)
+        session_dir = Path("out") / "sessions" / session_id
+        target = draft_path(output_path, session_dir)
     except ValueError as exc:
         return json_result({"status": "error", "message": str(exc)})
     if target.exists() and not overwrite:

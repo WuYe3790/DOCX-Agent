@@ -7,13 +7,19 @@ except ModuleNotFoundError:
     from src.docx_compiler.lower import diagnostics_for_blocks, normalize_block_support
     from src.docx_compiler.markdown_parser import blocks_to_dicts, parse_markdown_blocks
 
+from pathlib import Path
+
 from .common import json_result, read_markdown_text
 
 
-def parse_markdown_draft(markdown_path: str) -> str:
-    """把 Markdown 草稿解析成简单 IR，供模型确认样式映射和目标位置。"""
+def parse_markdown_draft(
+    session_id: str,  # v2: 后端 dispatcher 隐式注入, LLM 不可见 (避坑 1)
+    markdown_path: str,
+) -> str:
+    """v2: 解析 session_dir/drafts/ 下的 Markdown 草稿成 IR."""
     try:
-        target, content = read_markdown_text(markdown_path)
+        session_dir = Path("out") / "sessions" / session_id
+        target, content = read_markdown_text(markdown_path, session_dir)
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 

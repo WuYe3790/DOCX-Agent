@@ -13,6 +13,22 @@ import asyncio
 import json
 from typing import Optional
 
+
+# === v2: 避坑 1 核心 — SESSION_TOOLS 集合 ===
+# 这些工具的 Python 函数签名接受 session_id, 但 LLM 看到的 tools_schema **不**含 session_id
+# agent.py tool dispatcher 反射调用前会**隐式注入** session_id (= self.session_id)
+# LLM 传什么都无效, 即使 LLM 幻觉瞎传 session_id 也会被 self.session_id 覆盖
+# 注意: 只列 LLM **可见**工具 (在 TOOLS_SCHEMA 里), 内部 helper (如 apply_markdown_ir_after_paragraph)
+# 不在此集合 — 它们通过 markdown_to_word 间接传 session_id, 不走 dispatcher
+SESSION_TOOLS = {
+    "write_markdown_draft",
+    "read_markdown_draft",
+    "parse_markdown_draft",
+    "apply_markdown_ir_to_table_cell",
+    "markdown_to_word",
+    "analyze_docx_style_samples",
+}
+
 from openai import APITimeoutError, APIConnectionError, BadRequestError
 
 from llm_adapter import LLMClientAdapter
@@ -488,8 +504,18 @@ class Agent:
                             "message": f"当前状态 ({self.workflow_state}) 不允许调用该工具"
                         }, ensure_ascii=False)
                     else:
+                        # v2: 避坑 1 — 反射调用前隐式注入 session_id
+                        # 重要: 即便 LLM 在 args 里瞎传了 session_id, 我们也**覆盖**为 self.session_id (安全)
+                        call_args_str = args
+                        if name in SESSION_TOOLS:
+                            try:
+                                call_args_dict = json.loads(args) if isinstance(args, str) else dict(args)
+                            except (json.JSONDecodeError, TypeError):
+                                call_args_dict = {}
+                            call_args_dict["session_id"] = self.session_id  # ← 关键: 用 Agent 自己的 session_id 覆盖
+                            call_args_str = json.dumps(call_args_dict, ensure_ascii=False)
                         try:
-                            result = await asyncio.to_thread(call_tool, name, args)
+                            result = await asyncio.to_thread(call_tool, name, call_args_str)
                         except Exception as e:
                             result = json.dumps({
                                 "status": "error",

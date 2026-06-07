@@ -18,6 +18,7 @@ from .common import (
 
 
 def analyze_docx_style_samples(
+    session_id: str,  # v2: 后端 dispatcher 隐式注入, LLM 不可见 (避坑 1)
     docx_path: str,
     output_profile_path: str = "",
     max_samples: int = 16,
@@ -102,7 +103,7 @@ def analyze_docx_style_samples(
             "大规模写入前，优先按用户确认的 sample_id 仿写格式，避免把正文写成标题或加粗格式。",
         ],
     }
-    profile_path = _resolve_profile_path(docx_path, output_profile_path)
+    profile_path = _resolve_profile_path(docx_path, output_profile_path, session_id)
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_text(json_result(result), encoding="utf-8")
     result["style_profile_path"] = str(profile_path)
@@ -110,12 +111,18 @@ def analyze_docx_style_samples(
     return json_result(result)
 
 
-def _resolve_profile_path(docx_path: str, output_profile_path: str) -> Path:
+def _resolve_profile_path(docx_path: str, output_profile_path: str, session_id: str) -> Path:
+    """v2: profile 强制写到 session_dir/style_profiles/ 下 (沙箱化, 不再全局 out/style_profiles/)"""
+    session_dir = Path("out") / "sessions" / session_id
+    style_profiles_dir = session_dir / "style_profiles"
+    style_profiles_dir.mkdir(parents=True, exist_ok=True)
+
     if output_profile_path:
-        return Path(output_profile_path)
+        # 用户指定了文件名 — 强制放进 session_dir/style_profiles/, 忽略原路径
+        return style_profiles_dir / Path(output_profile_path).name
     stem = Path(docx_path).stem
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return Path("out") / "style_profiles" / f"{stem}_{timestamp}.json"
+    return style_profiles_dir / f"{stem}_{timestamp}.json"
 
 
 def _dominant_run_format(paragraph):

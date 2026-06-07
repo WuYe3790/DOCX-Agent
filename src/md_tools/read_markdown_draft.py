@@ -1,10 +1,17 @@
+from pathlib import Path
+
 from .common import json_result, read_markdown_text
 
 
-def read_markdown_draft(markdown_path: str, with_line_numbers: bool = True) -> str:
-    """读取 Markdown 草稿，默认返回带行号的内容。"""
+def read_markdown_draft(
+    session_id: str,  # v2: 后端 dispatcher 隐式注入, LLM 不可见 (避坑 1)
+    markdown_path: str,
+    with_line_numbers: bool = True,
+) -> str:
+    """v2: 读取 session_dir/drafts/ 下的 Markdown 草稿."""
     try:
-        target, content = read_markdown_text(markdown_path)
+        session_dir = Path("out") / "sessions" / session_id
+        target, content = read_markdown_text(markdown_path, session_dir)
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 

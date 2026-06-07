@@ -22,6 +22,7 @@ ACTION_GUIDE = """
 
 
 def markdown_to_word(
+    session_id: str,  # v2: 后端 dispatcher 隐式注入, LLM 不可见 (避坑 1)
     docx_path: str,
     output_path: str,
     actions: list[dict],
@@ -51,6 +52,7 @@ def markdown_to_word(
                 result = _run_action(
                     action=action,
                     action_index=index,
+                    session_id=session_id,  # v2: 透传到 apply_* (需读 session_dir/drafts/)
                     docx_path=current_input,
                     output_path=current_output,
                     default_markdown_path=markdown_path,
@@ -112,6 +114,7 @@ def markdown_to_word(
 def _run_action(
     action: dict,
     action_index: int,
+    session_id: str,  # v2: 透传到 apply_* (需读 session_dir/drafts/)
     docx_path: str,
     output_path: str,
     default_markdown_path: str | None,
@@ -127,6 +130,7 @@ def _run_action(
         return _run_markdown_table_cell_action(
             payload,
             action_index,
+            session_id,
             docx_path,
             output_path,
             default_markdown_path,
@@ -137,6 +141,7 @@ def _run_action(
         return _run_markdown_paragraph_action(
             payload,
             action_index,
+            session_id,
             docx_path,
             output_path,
             default_markdown_path,
@@ -150,6 +155,7 @@ def _run_action(
 def _run_markdown_table_cell_action(
     payload: dict,
     action_index: int,
+    session_id: str,  # v2
     docx_path: str,
     output_path: str,
     default_markdown_path: str | None,
@@ -171,6 +177,7 @@ def _run_markdown_table_cell_action(
     if missing:
         return json_result({"status": "error", "message": f"action {action_index} 缺少参数: {', '.join(missing)}", "action_guide": ACTION_GUIDE})
     return apply_markdown_ir_to_table_cell(
+        session_id=session_id,  # v2
         docx_path=docx_path,
         output_path=output_path,
         table_index=int(payload["table_index"]),
@@ -188,6 +195,7 @@ def _run_markdown_table_cell_action(
 def _run_markdown_paragraph_action(
     payload: dict,
     action_index: int,
+    session_id: str,  # v2
     docx_path: str,
     output_path: str,
     default_markdown_path: str | None,
@@ -216,6 +224,7 @@ def _run_markdown_paragraph_action(
             missing.extend(["paragraph_index", "anchor_text"])
         return json_result({"status": "error", "message": f"action {action_index} 缺少必填定位参数: {', '.join(missing)}，write_markdown_to_paragraph 必须同时传入 paragraph_index 和 anchor_text 以防文本错位", "action_guide": ACTION_GUIDE})
     return apply_markdown_ir_to_paragraph(
+        session_id=session_id,  # v2
         docx_path=docx_path,
         output_path=output_path,
         markdown_path=markdown_path,
