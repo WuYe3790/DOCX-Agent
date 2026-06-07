@@ -275,6 +275,38 @@ def test_next_config_has_rewrites_to_backend():
     print("[OK] Test 14: next.config.ts rewrites 配置 /api/sessions 等 -> :8000 (upload 已移除)")
 
 
+# === v2.2: 进页面默认空 UI, 不自动 resume 上次会话 ===
+
+def test_page_tsx_startup_does_not_auto_resume():
+    """Test 15: 启动 useEffect 只拉 sessions 列表 (sidebar 用), **不**自动 resume 上次会话
+
+    用户反馈: 之前进页面会默认打开上次的会话, 想要默认打开"新会话界面"
+    修复: 启动 useEffect 删除 lastSessionId 自动 resume 逻辑, 只 fetch /api/sessions 填 sidebar
+    """
+    content = read(APP_PAGE)
+    # 找启动 useEffect 块
+    startup_block = re.search(
+        r"useEffect\(\s*\(\)\s*=>\s*\{(.*?)\n\s*\}\s*,\s*\[\]\s*\);",
+        content,
+        re.DOTALL,
+    )
+    assert startup_block, "page.tsx 应有 useEffect(()=>{...}, []) 启动逻辑"
+    body = startup_block.group(1)
+
+    # 必须有 fetch /api/sessions (sidebar 列表)
+    assert "fetch(\"/api/sessions\")" in body, "启动 useEffect 应 fetch /api/sessions 填 sidebar"
+
+    # **不**应有自动 resume: 不应在启动时调 startAgentSession
+    assert "startAgentSession" not in body, (
+        "v2.2: 启动 useEffect **不**应自动调 startAgentSession (不自动 resume 上次会话)"
+    )
+    # **不**应有 localStorage 读 lastSessionId (getCurrentSessionId 是 page.tsx 内部 helper)
+    assert "getCurrentSessionId()" not in body, (
+        "v2.2: 启动 useEffect **不**应读 getCurrentSessionId() (不恢复上次激活的 session)"
+    )
+    print("[OK] Test 15: 启动 useEffect 只拉 sessions 列表, 不自动 resume (v2.2: 默认新会话界面)")
+
+
 if __name__ == "__main__":
     test_old_sessions_lib_deleted()
     test_new_session_types_lib_exists()
@@ -292,7 +324,9 @@ if __name__ == "__main__":
     test_frontend_handle_create_session_triggers_refresh()
     # === Step 5 fixup-2: "fetch /api/sessions 404" — Next.js dev server 不知道后端路由 ===
     test_next_config_has_rewrites_to_backend()
+    # === v2.2: 进页面默认空 UI, 不自动 resume 上次会话 ===
+    test_page_tsx_startup_does_not_auto_resume()
     print()
     print("=" * 50)
-    print("✓ All 14 Step 5 tests passed (10 base + 4 fixup)")
+    print("✓ All 15 Step 5 tests passed (10 base + 5 fixup)")
     print("=" * 50)

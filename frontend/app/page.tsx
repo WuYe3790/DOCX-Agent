@@ -241,30 +241,20 @@ export default function Home() {
     catch { return null; }
   };
 
-  // === v2: 启动时 HTTP 拉列表 + 选 lastSessionId resume / 首个 session resume / 无则建空 ===
+  // === v2.2: 启动时只拉列表 (sidebar 用), 不自动 resume 任何 session ===
+  // 用户期望: 进页面默认空 UI, 由用户主动从 sidebar 选 / 新建
+  // 副作用: 之前用 localStorage.getItem("docx-agent:currentSessionId") 记的"上次激活的 id" **不**再自动应用
+  //  (清空逻辑由用户主动 resetWorkspace() 或 handleCreateSession() 触发 — 见 setCurrentSessionId)
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch("/api/sessions");
-        if (!res.ok) {
-          console.warn("fetch /api/sessions failed:", res.status);
-          setSessions([]);
-        } else {
+        if (res.ok) {
           const list: SessionMeta[] = await res.json();
           setSessions(list);
-          const lastId = getCurrentSessionId();
-          const targetId = lastId && list.find((s) => s.id === lastId)
-            ? lastId
-            : list.length > 0
-            ? list[0].id
-            : null;
-          if (targetId) {
-            // v2: 通过 WS resume 重建上下文 (后端 Agent.load_from_disk)
-            startAgentSession("", "", targetId);
-          } else {
-            // 无 session: 留空 UI, 等用户发首条消息时再走 start
-            setMessages([]);
-          }
+        } else {
+          console.warn("fetch /api/sessions failed:", res.status);
+          setSessions([]);
         }
       } catch (e) {
         console.warn("session list fetch error:", e);
