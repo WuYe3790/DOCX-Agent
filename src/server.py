@@ -136,7 +136,10 @@ async def api_delete_session(session_id: str):
     """级联删除整个 session 目录 (含 drafts/ / style_profiles/ / uploads/ / logs/ / 3 JSON)."""
     session_dir = SESSIONS_ROOT / session_id
     if session_dir.exists():
-        if not session_dir.is_relative_to(SESSIONS_ROOT.resolve()):
+        # ⚠️ 两边都 resolve 成绝对路径再做 is_relative_to
+        # 原因: pathlib.is_relative_to 是字面量比较, 一边相对一边绝对永远 False
+        # (mixed path 被解释为 drive-relative, 永远不 relative)
+        if not session_dir.resolve().is_relative_to(SESSIONS_ROOT.resolve()):
             raise HTTPException(status_code=400, detail="非法 session_id (越界)")
         shutil.rmtree(session_dir)
         return {"status": "ok", "deleted": session_id}

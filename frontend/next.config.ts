@@ -17,6 +17,13 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_ORIGIN}/api/sessions/:id`,
       },
       {
+        // v3 修复: 之前列表里没有这条规则, 前端 fetch('/api/sessions/<id>/drafts')
+        // 不会被代理到后端, Next.js 自己 404
+        // 后果: fetchDrafts 永远失败 → draftFiles 保持空 → "查看草稿"按钮不渲染
+        source: "/api/sessions/:id/drafts",
+        destination: `${BACKEND_ORIGIN}/api/sessions/:id/drafts`,
+      },
+      {
         source: "/api/style/analyze",
         destination: `${BACKEND_ORIGIN}/api/style/analyze`,
       },
