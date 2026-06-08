@@ -45,6 +45,48 @@ class MessageManager:
             "content": content
         })
 
+    def _sanitize_entries(self) -> None:
+        """
+        一次性清理 _entries 中的不一致数据（兼容旧 session）。
+
+        触发点: load_from_disk 加载完 messages.json 后调用一次
+        让内存里的 _entries 干净, 下游逻辑 (debug 日志 / server.py 转 UI) 都受益
+
+        清理范围:
+          1) 脱空 tool_calls 字段 — 旧版本 (c2d4322 之前) 的 append_assistant
+             写过 {"role": "assistant", "tool_calls": []}, DeepSeek 严格校验会 400
+          2) 丢孤儿 tool 消息 — 工具调用结果残留在 _entries 但对应的
+             assistant(tool_calls) 缺失 (断网 / 旧数据残缺 / 外部篡改)
+          3) 丢空 tool_call_id 的 tool 消息 — 永远不可能有匹配的 assistant tool_call
+        """
+        # 先收集所有 valid tool_call_id (正向扫描, 找 assistant.tool_calls 里所有非空 id)
+        tool_ids: set = {
+            tc["id"]
+            for e in self._entries
+            if e.get("role") == "assistant"
+            for tc in (e.get("tool_calls") or [])
+            if tc.get("id")
+        }
+
+        cleaned: list[dict] = []
+        for e in self._entries:
+            entry = dict(e)  # 不原地修改 _entries 里的引用, 防 race
+            role = entry.get("role")
+
+            # 1) 脱空 tool_calls 字段
+            if role == "assistant" and entry.get("tool_calls") == []:
+                entry.pop("tool_calls", None)
+
+            # 2) & 3) 丢孤儿 / 空 id 的 tool 消息
+            if role == "tool":
+                tcid = entry.get("tool_call_id")
+                if not tcid or tcid not in tool_ids:
+                    continue  # 跳过孤儿 / 空 id 的 tool 消息
+
+            cleaned.append(entry)
+
+        self._entries = cleaned
+
     def build_request_messages(self, state_prompt: str) -> list[dict]:
         """
         构建发给 LLM 的消息列表。
@@ -88,9 +130,14 @@ class MessageManager:
                 result_rev.append(entry)
                 continue
 
-            # ── 无工具调用的 assistant 消息：直接保留 ──
+            # ── 无工具调用的 assistant 消息：直接保留（脱空 tool_calls 字段防御 DeepSeek 400）──
+            # 历史 session 的 messages.json 可能残留 {"role": "assistant", "tool_calls": []}
+            # 旧版本 (c2d4322 之前) 的 append_assistant 写过这种空数组
+            # DeepSeek 严格校验会把它当作"想调工具但 ID 为空"导致后续 tool 消息变孤儿 → 400
             if role == "assistant" and not entry.get("tool_calls"):
-                result_rev.append(entry)
+                entry_copy = dict(entry)
+                entry_copy.pop("tool_calls", None)  # 脱空数组字段
+                result_rev.append(entry_copy)
                 continue
 
             # ── 有工具调用的 assistant 消息：检查每个 tool_call ──
@@ -159,6 +206,28 @@ class MessageManager:
 
             # ── 其他 (system 等): 直接保留 ──
             result_rev.append(entry)
+
+        # ── 第三遍（正向）：丢弃孤儿 tool 消息（防御 DeepSeek 400）──
+        #
+        # 为什么需要第三遍而不是在 pass 2 内联?
+        # pass 2 是反向扫描, 每个 tool 消息在它的 assistant 之前被处理
+        # 反向时无法判断"preceding assistant 是否存在"
+        # 正向扫描最干净: 先收集所有 valid tool_call_id, 再过滤孤儿
+        #
+        # 场景: 旧 session 数据残缺 (assistant 丢了, tool 消息残留在 _entries)
+        # 或外部篡改 / messages.json 加载出错
+        valid_tc_ids: set = set()
+        for entry in result_rev:
+            if entry.get("role") == "assistant":
+                for tc in entry.get("tool_calls") or []:
+                    if tc.get("id"):
+                        valid_tc_ids.add(tc["id"])
+
+        result_rev = [
+            e for e in result_rev
+            if e.get("role") != "tool"
+            or (e.get("tool_call_id") and e["tool_call_id"] in valid_tc_ids)
+        ]
 
         # ── 拼接 system 消息 ──
         combined = f"{self._system_prompt}\n\n{state_prompt}"

@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).parent))
 
 import asyncio
 import json
+import uuid
 from typing import Optional
 
 
@@ -276,6 +277,10 @@ class Agent:
 
         msg_mgr = MessageManager(system_prompt)
         msg_mgr._entries = list(messages_data["entries"])
+        # v3: 加载时清理旧数据 — 修复 DeepSeek 400 反复出现
+        # 旧版本 (c2d4322 之前) 保存的 messages.json 含 {"role": "assistant", "tool_calls": []}
+        # DeepSeek 严格校验会报 400 (Messages with role 'tool' must be a response to ...)
+        msg_mgr._sanitize_entries()
         msg_mgr._total_input_tokens = messages_data["total_input_tokens"]
         msg_mgr._last_prompt_tokens = messages_data["last_prompt_tokens"]
 
@@ -526,7 +531,10 @@ class Agent:
             if tool_calls_map:
                 tool_calls_list = [
                     {
-                        "id": tool_calls_map[idx]["id"],
+                        # v3: 流式空 id 兜底 — DeepSeek 严格校验拒绝空 id
+                        # 极少见: LLM 服务端没返回 id, 或 chunk 累积时所有 tc.id 都为 None/空
+                        # 生成 call_<idx>_<random> 兜底, 保证 tool_call_id 永远非空
+                        "id": tool_calls_map[idx]["id"] or f"call_{idx}_{uuid.uuid4().hex[:8]}",
                         "type": "function",
                         "function": {
                             "name": tool_calls_map[idx]["name"],
