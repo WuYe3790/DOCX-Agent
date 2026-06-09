@@ -32,6 +32,8 @@ class LLMClientAdapter:
         if not self.provider:
             if top_base_url and "sensenova" in top_base_url:
                 self.provider = "sensenova"
+            elif top_base_url and "agnes" in top_base_url:
+                self.provider = "agnes"
             elif top_base_url and "deepseek" in top_base_url:
                 self.provider = "deepseek"
             else:
@@ -96,6 +98,32 @@ class LLMClientAdapter:
             self.base_url = self.base_url or "https://token.sensenova.cn/v1"
             self.model = self.model or "sensenova-6.7-flash-lite"
             self.thinking_type = "disabled"  # 商汤不需要 DeepSeek-style thinking extra_body
+
+        elif self.provider == "agnes":
+            # Agnes-2.0-Flash (Sapiens AI, OpenAI 兼容, 现价免费)
+            # thinking 注入方式: extra_body={"chat_template_kwargs": {"enable_thinking": True}}
+            self.api_key = os.getenv("AGNES_API_KEY") or os.getenv("LLM_API_KEY")
+            self.base_url = os.getenv("AGNES_BASE_URL") or os.getenv("LLM_BASE_URL")
+            self.model = os.getenv("AGNES_MODEL") or os.getenv("LLM_MODEL")
+            self.thinking_type = os.getenv("AGNES_THINKING") or os.getenv("DOCX_AGENT_THINKING")
+
+            # 厂商特定配置
+            self.api_key = self.api_key or provider_config.get("api_key")
+            self.base_url = self.base_url or provider_config.get("base_url")
+            self.model = self.model or provider_config.get("model")
+            if self.thinking_type is None:
+                self.thinking_type = provider_config.get("thinking", "enabled")  # probe 显示默认是关,这里要主动开
+
+            # 兼容旧版本单层级 config
+            if not provider_config and top_base_url and "agnes" in top_base_url:
+                self.api_key = self.api_key or top_api_key
+                self.base_url = self.base_url or top_base_url
+
+            # 默认兜底值
+            self.base_url = self.base_url or "https://apihub.agnes-ai.com/v1"
+            self.model = self.model or "agnes-2.0-flash"
+            if self.thinking_type is None:
+                self.thinking_type = "enabled"  # 默认开启 thinking (probe 验证有效)
 
         else:
             # 通用 OpenAI 兼容配置
