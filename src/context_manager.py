@@ -30,12 +30,14 @@ class MessageManager:
     def append_user(self, content: str):
         self._entries.append({"role": "user", "content": content})
 
-    def append_assistant(self, tool_calls: list, content: str = ""):
+    def append_assistant(self, tool_calls: list, content: str = "", reasoning_content: str = ""):
         msg: dict = {"role": "assistant"}
         if tool_calls:
             msg["tool_calls"] = tool_calls
         if content:
             msg["content"] = content
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
         self._entries.append(msg)
 
     def append_tool_result(self, tool_call_id: str, content: str):
@@ -137,6 +139,8 @@ class MessageManager:
             if role == "assistant" and not entry.get("tool_calls"):
                 entry_copy = dict(entry)
                 entry_copy.pop("tool_calls", None)  # 脱空数组字段
+                # reasoning_content 只用于 UI 展示, 不发给 LLM (避免污染对话历史 + 浪费 token)
+                entry_copy.pop("reasoning_content", None)
                 result_rev.append(entry_copy)
                 continue
 
@@ -184,6 +188,7 @@ class MessageManager:
                     # 有保留的 tool_call: 复制消息 + 替换 tool_calls 列表
                     entry_copy = dict(entry)
                     entry_copy["tool_calls"] = kept_tc
+                    entry_copy.pop("reasoning_content", None)  # 不发给 LLM
                     result_rev.append(entry_copy)
                 elif entry.get("content"):
                     # 兜底补丁: kept_tc 空但有 content 时 (典型: 断网导致所有
@@ -193,6 +198,7 @@ class MessageManager:
                     # → 同时避免 OpenAI 看到 tool_calls=[] + 无对应 tool result 又报错
                     entry_copy = dict(entry)
                     entry_copy.pop("tool_calls", None)
+                    entry_copy.pop("reasoning_content", None)  # 不发给 LLM
                     result_rev.append(entry_copy)
                 # else: kept_tc 空 + 无 content → 整条丢弃 (罕见)
                 continue

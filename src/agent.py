@@ -543,7 +543,7 @@ class Agent:
                     }
                     for idx in sorted(tool_calls_map.keys())
                 ]
-                self.msg_mgr.append_assistant(tool_calls_list, accumulated_content)
+                self.msg_mgr.append_assistant(tool_calls_list, accumulated_content, accumulated_reasoning)
                 # v3: Bug A 防御 — 立即 checkpoint, 关闭"assistant 落盘后断网"窗口
                 # 原 _checkpoint() 在 line 498 (tool_start 之后), 中间 ~30-50ms 断网
                 # 会导致 assistant(tool_calls) 落盘但 tool result 没进, resume 时
@@ -608,7 +608,7 @@ class Agent:
                 continue
 
             # 无工具调用：处理 LLM 的文本响应
-            self.msg_mgr.append_assistant([], accumulated_content)
+            self.msg_mgr.append_assistant([], accumulated_content, accumulated_reasoning)
 
             content_stripped = (accumulated_content or "").strip()
             if len(content_stripped) < 200:
