@@ -9,21 +9,7 @@ import SessionSidebar from "../components/session-sidebar";
 // v2: 删 IndexedDB lib/sessions — 改用 HTTP fetch + WS resume (后端是 source of truth)
 import type { SessionMeta } from "../lib/session-types";
 import type { DraftFile } from "../lib/draft-types";
-
-interface Message {
-  role: "user" | "assistant" | "tool";
-  content?: string;
-  reasoning_content?: string;
-  toolName?: string;
-  toolArgs?: string;
-  toolResult?: string;
-  toolStatus?: "running" | "success" | "error";
-  id?: string;
-}
-
-interface TokenInfo {
-  token_count: number;
-}
+import type { Message } from "../lib/message-types";
 
 // === ReasoningPanel: 渲染已定型历史, 支持手动折叠 + autoCollapse 接力 ===
 // autoCollapse=true 时, 400ms 后自动收起 (历史 thinking 接力折叠)
