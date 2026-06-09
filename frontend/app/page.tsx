@@ -4,10 +4,9 @@ import React, { useState, useEffect, useRef } from "react";
 import { Terminal } from "lucide-react";
 // PanelLeft/Send 已迁到 ChatHeader/ChatInput, RefreshCw/Plus/Trash2 等在 SessionSidebar 内部
 // motion/AnimatePresence 已迁到 ChatMessageBlocks/ChatInput
-import MarkdownRenderer from "../components/markdown-renderer";
+// MarkdownRenderer/ReasoningPanel 已迁入 ChatMessageBlocks
 import PreviewPanel from "../components/preview-panel";
 import SessionSidebar from "../components/session-sidebar";
-import ReasoningPanel from "../components/reasoning-panel";
 import AnimatedLivePanel from "../components/animated-live-panel";
 import ChatHeader from "../components/chat-header";
 import ChatMessageBlocks from "../components/chat-message-blocks";
