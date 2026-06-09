@@ -611,7 +611,7 @@ class Agent:
             self.msg_mgr.append_assistant([], accumulated_content, accumulated_reasoning)
 
             content_stripped = (accumulated_content or "").strip()
-            if len(content_stripped) < 200:
+            if len(content_stripped) < 5:
                 if self.workflow_state == STYLE_REVIEW:
                     guidance = "你当前处于样式审核阶段，请基于已读取的文档信息直接输出样式分析结果（列出 sample_id 与对应格式特征），不要尝试查看其他目录或文件。"
                 elif self.workflow_state == MD_DRAFT:
