@@ -193,6 +193,11 @@ class Agent:
         self._pending_approval = False  # v2: resume 时由 server 读出, 判断前端要不要展示"待审批"按钮
         self._round_index = 0
         self.draft_files_written: list[str] = []   # 追踪 MD_DRAFT 阶段写过的所有 .md 路径
+        # === B 方案: finish_reason=None 流不完整重试计数 ===
+        # 商汤 SenseNova 偶发"流静默关闭"(OpenAI 协议异常): finish_reason 缺失, content/tool_calls 都空
+        # 表现为 reasoning-only 死循环 (复现: session-20260609-205746 第 13/14 轮)
+        # 策略: 检测到 finish_reason=None + 无 tool_calls → 不污染 conversation, 重发请求
+        self._stream_incomplete_retries = 0
         # === v2: 持久化相关 ===
         self.session_id = session_id
         self.session_dir = session_dir  # Path("out") / "sessions" / session_id
@@ -526,6 +531,35 @@ class Agent:
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0),
                     "completion_tokens": getattr(usage, "completion_tokens", 0),
                 })
+
+            # --- 4.5 B 方案: 商汤 finish_reason=None 流不完整时直接 API 重试 ---
+            # 现象: stream_error=None (流没异常) + finish_reason=None (server 没发 finish chunk) + tool_calls 空
+            #       → server 静默关闭流, OpenAI 协议异常 (commit/复现: session-20260609-205746 R13/14)
+            # 策略: 不调 append_assistant (保持 conversation 干净), continue 重发请求
+            # 重试耗尽 → 重置计数, 落到下面原"空响应自动引导"作为兜底
+            _MAX_INCOMPLETE_STREAM_RETRY = 2
+            if finish_reason is None and not tool_calls_map:
+                if self._stream_incomplete_retries < _MAX_INCOMPLETE_STREAM_RETRY:
+                    self._stream_incomplete_retries += 1
+                    self._append_log("stream_incomplete_retry", {
+                        "round": self._round_index,
+                        "attempt": self._stream_incomplete_retries,
+                        "had_content": len(accumulated_content) > 0,
+                        "had_reasoning": len(accumulated_reasoning) > 0,
+                        "reasoning_len": len(accumulated_reasoning),
+                    })
+                    # 关键: 不 append_assistant, conversation 不动; continue 重发请求
+                    # (_round_index 会在下次 while 顶部自增, 重试占独立 round, 日志可追溯)
+                    continue
+                # 重试耗尽: 重置计数, 落地到下面原有路径作为兜底
+                self._append_log("stream_incomplete_retry_exhausted", {
+                    "round": self._round_index,
+                    "max_retries": _MAX_INCOMPLETE_STREAM_RETRY,
+                })
+                self._stream_incomplete_retries = 0
+            else:
+                # 正常路径: 流正常结束 或 有 tool_calls → 清零重试计数, 避免跨轮累积
+                self._stream_incomplete_retries = 0
 
             # 有工具调用时：逐个执行并 yield 事件
             if tool_calls_map:
