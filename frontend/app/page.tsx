@@ -214,9 +214,12 @@ export default function Home() {
     setInputValue("");
 
     if (!hasActiveConnection()) {
-      // 新会话, 用户应跟读
       isScrolledToBottom.current = true;
-      startAgentSession(prompt, "");
+      if (currentSessionId) {
+        startAgentSession(prompt, docxPath, currentSessionId);
+      } else {
+        startAgentSession(prompt, "");
+      }
       return;
     }
 
@@ -225,8 +228,12 @@ export default function Home() {
     // 修复 2: 用户发了 prompt, 应该跟读
     isScrolledToBottom.current = true;
     if (!sendContinue(prompt)) {
-      // WS 在 check 后断了, 回退到 start
-      startAgentSession(prompt, "");
+      // WS 在 check 后断了, 尝试恢复
+      if (currentSessionId) {
+        startAgentSession(prompt, docxPath, currentSessionId);
+      } else {
+        startAgentSession(prompt, "");
+      }
     }
   };
 

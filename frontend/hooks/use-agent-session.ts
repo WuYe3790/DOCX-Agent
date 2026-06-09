@@ -48,6 +48,7 @@ export function useAgentSession(opts: {
   const liveContentRef = useRef<string>("");
   const isRenderingRef = useRef<boolean>(false);  // RAF 节流锁
   const thinkTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingPromptRef = useRef<string>("");
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -104,6 +105,7 @@ export function useAgentSession(opts: {
     setTokenCount(0);
     setCurrentSessionId(null);
     setCurrentSessionInfo(null);
+    pendingPromptRef.current = "";
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -120,6 +122,7 @@ export function useAgentSession(opts: {
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     setIsGenerating(false);
+    pendingPromptRef.current = "";
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -181,6 +184,12 @@ export function useAgentSession(opts: {
     // 发起新会话: 重置预览侧栏状态
     onShowPreview(false);
     onResetDrafts();
+
+    if (resumeSessionId && initialPrompt) {
+      pendingPromptRef.current = initialPrompt;
+    } else {
+      pendingPromptRef.current = "";
+    }
 
     const socket = new WebSocket("ws://127.0.0.1:8000/api/ws/agent");
     wsRef.current = socket;
@@ -385,6 +394,17 @@ export function useAgentSession(opts: {
           // 状态:
           //   - isWaitingApproval=true  → 显示"批准/拒绝"按钮 (用户发 approve/reject)
           //   - isWaitingApproval=false → 隐藏按钮, 等用户主动发新消息
+
+          // 自动发送暂存的挂起 prompt
+          if (pendingPromptRef.current) {
+            const prompt = pendingPromptRef.current;
+            pendingPromptRef.current = ""; // 清空
+            setIsGenerating(true);
+            setMessages((prev) => [...prev, { role: "user", content: prompt }]);
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
+            }
+          }
           break;
         }
 
