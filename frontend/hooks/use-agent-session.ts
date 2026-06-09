@@ -378,7 +378,10 @@ export function useAgentSession(opts: {
           clearLiveStream();
           setIsGenerating(false);
           setApprovalPhase(data.phase as any);
-          setIsWaitingApproval(data.isWaitingApproval ?? false);
+          // 字段名错配修复: 后端 paused 帧字段是 snake_case `is_waiting_approval`
+          //   (src/agent.py:370), 而 history 帧是 camelCase `isWaitingApproval`
+          //   兼容两种命名, 优先 snake (paused 帧用)
+          setIsWaitingApproval((data.is_waiting_approval ?? data.isWaitingApproval) as boolean);
           // 状态:
           //   - isWaitingApproval=true  → 显示"批准/拒绝"按钮 (用户发 approve/reject)
           //   - isWaitingApproval=false → 隐藏按钮, 等用户主动发新消息
