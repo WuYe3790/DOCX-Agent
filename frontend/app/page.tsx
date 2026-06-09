@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Send, CheckCircle2, ChevronDown, RefreshCw, User, PanelLeft, Plus, Trash2 } from "lucide-react";
+import { Terminal, Send, CheckCircle2, User, PanelLeft } from "lucide-react";
+// RefreshCw, Plus, Trash2 等图标在 SessionSidebar 内部已用, 此处不再 import
 import { motion, AnimatePresence } from "framer-motion";
 import MarkdownRenderer from "../components/markdown-renderer";
 import PreviewPanel from "../components/preview-panel";
@@ -11,88 +12,64 @@ import AnimatedLivePanel from "../components/animated-live-panel";
 // v2: 删 IndexedDB lib/sessions — 改用 HTTP fetch + WS resume (后端是 source of truth)
 import type { SessionMeta } from "../lib/session-types";
 import type { DraftFile } from "../lib/draft-types";
-import type { Message } from "../lib/message-types";
+import type { Message, RenderBlock } from "../lib/message-types";
+import { useAgentSession } from "../hooks/use-agent-session";
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [isWaitingApproval, setIsWaitingApproval] = useState<boolean>(false);
-  const [approvalPhase, setApprovalPhase] = useState<"style_review" | "md_draft" | "word_editing" | null>(null);
-  const [docxPath, setDocxPath] = useState<string>("");
+  // === 本地 UI state (不被 hook 管) ===
   const [inputValue, setInputValue] = useState<string>("");
   const [feedbackValue, setFeedbackValue] = useState<string>("");
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
-  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
-  const [tokenCount, setTokenCount] = useState<number>(0);
 
   // === 草稿预览侧栏 (md_draft 阶段自动展开) ===
-  // 改造: 从单一 previewContent 字符串 → 多文件结构化列表
-  //   - showPreview 控制右栏滑入/滑出 (沿用)
-  //   - draftFiles 拉自后端 GET /api/sessions/{id}/drafts, 含 name/content/size/mtime
-  //   - activeFilename 用户当前选中的 tab; 默认 fetchDrafts 时取最新文件
   const [showPreview, setShowPreview] = useState<boolean>(false);
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
 
   // === 会话管理 (v2: 后端持久化, 前端只维护"当前激活的 session_id") ===
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(null);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState<boolean>(false);
-  const [currentSessionInfo, setCurrentSessionInfo] = useState<{
-    id: string;
-    docxPath: string;
-    approvalPhase: "style_review" | "md_draft" | "word_editing" | null;
-    isWaitingApproval: boolean;
-  } | null>(null);
 
-  // === 实时流状态 (RAF 节流) ===
-  const [liveReasoning, setLiveReasoning] = useState<string>("");
-  const [liveContent, setLiveContent] = useState<string>("");
-  const [thinkTime, setThinkTime] = useState<number>(0);
+  // === 工具选择 UI state (本地) ===
+  const [, setExpandedTools] = useState<Set<string>>(new Set());
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
 
-  // === 实时流 Refs ===
-  const liveReasoningRef = useRef<string>("");
-  const liveContentRef = useRef<string>("");
-  const isRenderingRef = useRef<boolean>(false);  // RAF 节流锁
-  const thinkTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  const wsRef = useRef<WebSocket | null>(null);
+  // === Refs ===
   const chatEndRef = useRef<HTMLDivElement>(null);
-
   // === 滚动意图侦测 (修复 2) ===
   const isScrolledToBottom = useRef<boolean>(true);
 
-  // === v2: localStorage 单 key helper (只存"上次激活的 session_id", 不存 session 内容) ===
-  const CURRENT_SESSION_KEY = "docx-agent:currentSessionId";
-  // v3 修复: 同时维护 currentSessionIdRef, 解决 socket.onmessage 闭包陈旧问题
-  //   socket.onmessage 在 startAgentSession 首次调用时绑定, 捕获**那一刻**的
-  //   currentSessionId (新会话下是 null); 后续 setCurrentSessionId 触发重渲染
-  //   不会重新绑定 onmessage, 闭包仍是 null → fetchDrafts 条件失败
-  //   ref 永远是最新的, 用于 onmessage 闭包内读取
-  const currentSessionIdRef = useRef<string | null>(null);
-  const setCurrentSessionId = (id: string | null) => {
-    if (typeof window === "undefined") return;
-    try {
-      if (id === null) localStorage.removeItem(CURRENT_SESSION_KEY);
-      else localStorage.setItem(CURRENT_SESSION_KEY, id);
-      setCurrentSessionIdState(id);
-    } catch (e) {
-      console.warn("setCurrentSessionId failed:", e);
-    }
-    // 同步更新 ref (绕过闭包陷阱)
-    currentSessionIdRef.current = id;
-  };
-  const getCurrentSessionId = (): string | null => {
-    if (typeof window === "undefined") return null;
-    try { return localStorage.getItem(CURRENT_SESSION_KEY); }
-    catch { return null; }
-  };
+  // === Agent hook (WS 生命周期 + 实时流 + approval state) ===
+  //   回调函数让 hook 在 onmessage 处理时能触发 page UI 侧栏联动
+  //   (hook 不越界管 UI state, 保持单一职责)
+  const agent = useAgentSession({
+    onRefreshSessions: () => { void refreshSessions(); },
+    onFetchDrafts: (sessionId) => { void fetchDrafts(sessionId); },
+    onResetDrafts: () => resetDrafts(),
+    onShowPreview: (show) => setShowPreview(show),
+  });
+  const {
+    messages,
+    isConnected,
+    isGenerating,
+    isWaitingApproval,
+    approvalPhase,
+    docxPath,
+    tokenCount,
+    liveReasoning,
+    liveContent,
+    thinkTime,
+    currentSessionId,
+    start: startAgentSession,
+    stop: stopAgentSession,
+    sendContinue,
+    sendApprove,
+    resetForCreate,
+    resetForWorkspace,
+    hasActiveConnection,
+  } = agent;
 
   // === v2.2: 启动时只拉列表 (sidebar 用), 不自动 resume 任何 session ===
   // 用户期望: 进页面默认空 UI, 由用户主动从 sidebar 选 / 新建
-  // 副作用: 之前用 localStorage.getItem("docx-agent:currentSessionId") 记的"上次激活的 id" **不**再自动应用
-  //  (清空逻辑由用户主动 resetWorkspace() 或 handleCreateSession() 触发 — 见 setCurrentSessionId)
   useEffect(() => {
     (async () => {
       try {
@@ -125,15 +102,7 @@ export default function Home() {
     }
   };
 
-  // === v2: 拉取指定 session 的所有 MD 草稿 (元数据 + 内容)
-  // 触发时机:
-  //   1) 后端 wait_approval 推送 phase=md_draft 时
-  //   2) 用户主动点 Header "查看草稿" 按钮时
-  // 默认选中策略:
-  //   - 若已有 activeFilename 且仍在列表中 → 保持 (用户主动切换的不被覆盖)
-  //   - 否则取最新文件 (后端已按 mtime 升序, 末尾即最新)
-  //   - 列表为空 → 置 null
-  // 错误处理: try/catch + console.warn, UI 保持上次状态不崩
+  // === v2: 拉取指定 session 的所有 MD 草稿 (元数据 + 内容) ===
   const fetchDrafts = async (sessionId: string) => {
     if (!sessionId) return;
     try {
@@ -154,8 +123,7 @@ export default function Home() {
     }
   };
 
-  // === 清空草稿列表 + 选中 (切会话 / 新建 / 重置时复用)
-  // 注意: 不清 showPreview, 因为右栏可能在动画收尾中
+  // === 清空草稿列表 + 选中 (切会话 / 新建 / 重置时复用) ===
   const resetDrafts = () => {
     setDraftFiles([]);
     setActiveFilename(null);
@@ -168,10 +136,7 @@ export default function Home() {
       return;
     }
     // 1. 关旧 WS
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    stopAgentSession();
     // 2. WS resume 重建 (后端发 history frame, onmessage 处理覆盖 state)
     startAgentSession("", "", id);
     setSessionSidebarOpen(false);
@@ -180,29 +145,13 @@ export default function Home() {
   // === v2: 新建会话 = 清空前端 state + 留空等用户发首条消息 (发时走 start) ===
   const handleCreateSession = () => {
     // Bug A 修复: 重置所有 approval + UI 状态, 避免旧 session 的状态泄漏到新 session
-    setIsWaitingApproval(false);
-    setApprovalPhase(null);
-    setIsGenerating(false);
-    setIsConnected(false);
     setFeedbackValue("");
-    clearLiveStream();
-    setShowPreview(false);
-    setTokenCount(0);
     setExpandedTools(new Set());
     setSelectedToolId(null);
-
-    // 关旧 WS (如果有)
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    // 清 currentSessionId (但不主动 start — 等用户发消息时 startAgentSession 走 start)
-    setCurrentSessionId(null);
-    setCurrentSessionInfo(null);
-    setMessages([]);
-    resetDrafts();
-    setDocxPath("");
     setSessionSidebarOpen(false);
+    resetDrafts();
+    // 重置 agent state (含 WS 关闭 + 全部 agent state)
+    resetForCreate();
     // v2 fix: 新建空 session (前端), 主动刷列表让 sidebar 立即看到
     void refreshSessions();
   };
@@ -234,19 +183,6 @@ export default function Home() {
     isScrolledToBottom.current = scrollHeight - scrollTop - clientHeight < 150;
   };
 
-  // === 实时流清理 ===
-  const clearLiveStream = () => {
-    liveReasoningRef.current = "";
-    liveContentRef.current = "";
-    setLiveReasoning("");
-    setLiveContent("");
-    setThinkTime(0);
-    if (thinkTimerRef.current) {
-      clearInterval(thinkTimerRef.current);
-      thinkTimerRef.current = null;
-    }
-  };
-
   // Auto-scroll chat window (修复 2: 滚动意图侦测)
   useEffect(() => {
     if (!isScrolledToBottom.current) return;
@@ -256,12 +192,9 @@ export default function Home() {
   }, [messages, isWaitingApproval, liveReasoning, liveContent, isGenerating]);
 
   const resetWorkspace = async () => {
-    setMessages([]);
-    clearLiveStream();
-    setDocxPath("");
-    setIsWaitingApproval(false);
-    setApprovalPhase(null);
-    setIsGenerating(false);
+    // 重置 agent state (partial: 不重置 isConnected / tokenCount / currentSessionId / currentSessionInfo)
+    resetForWorkspace();
+    // 重置 page UI state
     setExpandedTools(new Set());
     setSelectedToolId(null);
     setShowPreview(false);
@@ -269,324 +202,6 @@ export default function Home() {
     setInputValue("");
     setFeedbackValue("");
     isScrolledToBottom.current = true;  // 重置, 准备跟读
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    // v2: 后端自动持久化, 不再前端 persist
-  };
-
-  const startAgentSession = (initialPrompt: string, path: string, resumeSessionId?: string) => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-
-    // 发起新会话: 重置预览侧栏状态
-    setShowPreview(false);
-    resetDrafts();
-
-    const socket = new WebSocket("ws://127.0.0.1:8000/api/ws/agent");
-    wsRef.current = socket;
-
-    socket.onopen = () => {
-      setIsConnected(true);
-      if (resumeSessionId) {
-        // v2: resume 已有 session (后端 Agent.load_from_disk)
-        socket.send(JSON.stringify({ type: "resume", session_id: resumeSessionId }));
-        // 注意: 不立即 push user message, 等 history frame 回来再覆盖
-      } else {
-        // v2: start 新 session (后端生成 session_id)
-        setIsGenerating(true);
-        socket.send(JSON.stringify({ type: "start", prompt: initialPrompt, docx_path: path }));
-        if (initialPrompt) {
-          setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
-        }
-      }
-    };
-
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      switch (data.type) {
-        case "session_created": {
-          // v2: 后端生成 session_id, 第一个 frame 推过来
-          setCurrentSessionId(data.session_id);
-          setCurrentSessionInfo({
-            id: data.session_id,
-            docxPath: data.docx_path || "",
-            approvalPhase: data.approvalPhase ?? null,
-            isWaitingApproval: data.isWaitingApproval ?? false,
-          });
-          // 异步刷新 sidebar 列表 (拉新 session 进来)
-          void refreshSessions();
-          break;
-        }
-        case "history": {
-          // v2: resume 成功, 后端 dump 完整 history
-          setCurrentSessionId(data.session_id);
-          setCurrentSessionInfo({
-            id: data.session_id,
-            docxPath: data.docxPath || "",
-            approvalPhase: data.approvalPhase ?? null,
-            isWaitingApproval: data.isWaitingApproval ?? false,
-          });
-          setMessages(data.messages || []);
-          setDocxPath(data.docxPath || "");
-          setApprovalPhase(data.approvalPhase ?? null);
-          setIsWaitingApproval(data.isWaitingApproval ?? false);
-          // 状态恢复后, 不需要再等后端推内容 (history 已经是终态)
-          setIsGenerating(false);
-          void refreshSessions();
-          // 切到 md_draft 阶段的 session: 自动拉取其草稿文件列表
-          // (切会话时不会触发 wait_approval, 所以必须在 resume 阶段补一刀)
-          if (data.approvalPhase === "md_draft") {
-            void fetchDrafts(data.session_id);
-          }
-          break;
-        }
-        case "round_start": {
-          // 修复 B: 先把当前 ref 里的内容固化为 messages (防止"被后端打回"时数据丢失)
-          // 后端在 LLM 漏调/错调工具时会丢弃上一轮 reasoning+content, 直接发 round_start
-          // 此时如果没有兜底固化, 用户会看到内容"突然消失"
-          const prevR = liveReasoningRef.current;
-          const prevC = liveContentRef.current;
-          if (prevR || prevC) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant" as const,
-                content: prevC || undefined,
-                reasoning_content: prevR || undefined,
-              },
-            ]);
-          }
-          // 然后才清空
-          liveReasoningRef.current = "";
-          liveContentRef.current = "";
-          setLiveReasoning("");
-          setLiveContent("");
-          setThinkTime(0);
-
-          if (thinkTimerRef.current) clearInterval(thinkTimerRef.current);
-          thinkTimerRef.current = setInterval(() => {
-            setThinkTime((prev) => prev + 1);
-          }, 1000);
-
-          setIsGenerating(true);
-          if (data.token_count !== undefined) {
-            setTokenCount(data.token_count);
-          }
-          break;
-        }
-
-        case "heartbeat":
-          break;
-
-        case "reasoning": {
-          // RAF 节流
-          liveReasoningRef.current += data.delta;
-          if (!isRenderingRef.current) {
-            isRenderingRef.current = true;
-            requestAnimationFrame(() => {
-              setLiveReasoning(liveReasoningRef.current);
-              isRenderingRef.current = false;
-            });
-          }
-          break;
-        }
-
-        case "content": {
-          liveContentRef.current += data.delta;
-          if (!isRenderingRef.current) {
-            isRenderingRef.current = true;
-            requestAnimationFrame(() => {
-              setLiveContent(liveContentRef.current);
-              isRenderingRef.current = false;
-            });
-          }
-          break;
-        }
-
-        case "reasoning_end": {
-          // 推理结束: 立即固化思考到历史, 让 ReasoningPanel 触发折叠动画
-          // 消除"思考-工具调用"之间的视觉黑洞期
-          const txtR = liveReasoningRef.current;
-          const txtC = liveContentRef.current;
-          if (txtR || txtC) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant" as const,
-                content: txtC || undefined,
-                reasoning_content: txtR || undefined,
-              },
-            ]);
-          }
-          clearLiveStream();
-          break;
-        }
-
-        case "tool_start": {
-          // 读 ref 固化为 messages
-          const txtR = liveReasoningRef.current;
-          const txtC = liveContentRef.current;
-          if (txtR || txtC) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant" as const,
-                content: txtC || undefined,
-                reasoning_content: txtR || undefined,
-              },
-            ]);
-          }
-          // 延迟一帧清空: 让 messages 推入先 commit, AnimatePresence 看到 exit
-          clearLiveStream();
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "tool",
-              toolName: data.name,
-              toolArgs: data.arguments,
-              toolStatus: "running",
-              id: data.name + "_" + crypto.randomUUID(),
-            },
-          ]);
-          break;
-        }
-
-        case "tool_end": {
-          setMessages((prev) =>
-            prev.map((msg) => {
-              if (msg.role === "tool" && msg.toolName === data.name && msg.toolStatus === "running") {
-                return {
-                  ...msg,
-                  toolStatus: data.result.includes('"status": "error"') ? "error" : "success",
-                  toolResult: data.result,
-                };
-              }
-              return msg;
-            })
-          );
-          break;
-        }
-
-        case "paused": {
-          // v3: 切历史后后端 yield 的首个事件, 表示"已恢复状态, 等用户消息"
-          // 作用:
-          //   - setIsGenerating(false): 关闭 loading 状态
-          //   - setApprovalPhase: 还原后端的 workflow_state (style_review/md_draft/word_editing)
-          //   - setIsWaitingApproval: 决定 UI 显示"批准/拒绝"按钮还是输入框
-          // 注意: messages 已经从 history frame 加载过了, 这里不需要再处理
-          clearLiveStream();
-          setIsGenerating(false);
-          setApprovalPhase(data.phase as any);
-          setIsWaitingApproval(data.isWaitingApproval ?? false);
-          // 状态:
-          //   - isWaitingApproval=true  → 显示"批准/拒绝"按钮 (用户发 approve/reject)
-          //   - isWaitingApproval=false → 隐藏按钮, 等用户主动发新消息
-          break;
-        }
-
-        case "wait_approval": {
-          const txtR = liveReasoningRef.current;
-          const txtC = liveContentRef.current;
-          if (txtR || txtC) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant" as const,
-                content: txtC || undefined,
-                reasoning_content: txtR || undefined,
-              },
-            ]);
-          }
-          clearLiveStream();
-
-          // 修复 1: 智能 push vs merge
-          // 如果最后一条是 assistant, 合并 content; 否则 push 新 assistant
-          if (data.content !== undefined) {
-            setMessages((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
-                // 最后一条是 assistant: 合并 content
-                return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
-              }
-              // 最后一条不是 assistant (如 tool): 安全地 push 新 assistant
-              return [...prev, { role: "assistant", content: data.content }];
-            });
-          }
-          setApprovalPhase(data.phase);
-          setIsWaitingApproval(true);
-          setIsGenerating(false);
-
-          // md_draft 阶段: 自动展开右侧预览侧栏(从后端拉取结构化文件列表)
-          // 拉取策略见 fetchDrafts() 注释: 一次拿所有文件, 默认选最新
-          // v3 修复: 用 currentSessionIdRef 读最新值, 避免 onmessage 闭包陈旧
-          const sessionId = currentSessionIdRef.current;
-          if (data.phase === "md_draft" && sessionId) {
-            setShowPreview(true);
-            void fetchDrafts(sessionId);
-          }
-          break;
-        }
-
-        case "done": {
-          const txtR = liveReasoningRef.current;
-          const txtC = liveContentRef.current;
-          if (txtR || txtC) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant" as const,
-                content: txtC || undefined,
-                reasoning_content: txtR || undefined,
-              },
-            ]);
-          }
-          clearLiveStream();
-
-          // 修复 1: 同 wait_approval 模式
-          if (data.content !== undefined) {
-            setMessages((prev) => {
-              const lastIdx = prev.length - 1;
-              if (lastIdx >= 0 && prev[lastIdx].role === "assistant") {
-                return [...prev.slice(0, lastIdx), { ...prev[lastIdx], content: data.content }];
-              }
-              return [...prev, { role: "assistant", content: data.content }];
-            });
-          }
-          setIsWaitingApproval(false);
-          setApprovalPhase(null);
-          setIsGenerating(false);
-          break;
-        }
-
-        case "error":
-          setIsGenerating(false);
-          alert(`Agent 运行报错: ${data.message}`);
-          break;
-      }
-    };
-
-    socket.onclose = () => {
-      setIsConnected(false);
-      setIsWaitingApproval(false);
-      setApprovalPhase(null);
-      setIsGenerating(false);
-      if (thinkTimerRef.current) {
-        clearInterval(thinkTimerRef.current);
-        thinkTimerRef.current = null;
-      }
-    };
-
-    socket.onerror = (err) => {
-      console.error("WebSocket error", err);
-      setIsConnected(false);
-      setIsWaitingApproval(false);
-      setApprovalPhase(null);
-      setIsGenerating(false);
-    };
   };
 
   const handleSendPrompt = (e: React.FormEvent) => {
@@ -595,44 +210,29 @@ export default function Home() {
     const prompt = inputValue.trim();
     setInputValue("");
 
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      isScrolledToBottom.current = true;  // 新会话, 用户应跟读
-      setIsGenerating(true);
+    if (!hasActiveConnection()) {
+      // 新会话, 用户应跟读
+      isScrolledToBottom.current = true;
       startAgentSession(prompt, "");
       return;
     }
 
     if (isWaitingApproval) return;
 
-    isScrolledToBottom.current = true;  // 修复 2: 用户发了 prompt, 应该跟读
-    setMessages((prev) => [...prev, { role: "user", content: prompt }]);
-    setIsGenerating(true);
-    wsRef.current.send(JSON.stringify({ type: "continue", prompt }));
+    // 修复 2: 用户发了 prompt, 应该跟读
+    isScrolledToBottom.current = true;
+    if (!sendContinue(prompt)) {
+      // WS 在 check 后断了, 回退到 start
+      startAgentSession(prompt, "");
+    }
   };
 
   const handleApprove = (approved: boolean, feedback?: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+    if (!sendApprove(approved, feedback)) {
       alert("与 Agent 的连接已断开，请重新输入需求开始新会话。");
       return;
     }
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: "approve",
-        approved,
-        feedback: feedback || "",
-      })
-    );
-
-    const userActionText = approved
-      ? "【确认同意】同意并进入下一阶段"
-      : `【拒绝反馈】反馈修改建议：${feedback}`;
-    setMessages((prev) => [...prev, { role: "user", content: userActionText }]);
-
     isScrolledToBottom.current = true;  // 修复 2: 审批完成, 用户应跟读下一阶段
-    setIsWaitingApproval(false);
-    setApprovalPhase(null);
-    setIsGenerating(true);
   };
 
   const handleApproveAction = () => {
@@ -648,13 +248,7 @@ export default function Home() {
   // === 派生 renderBlocks: 折叠 messages 数组为 4 种类型化渲染块 ===
   // 目的: 让间距判断从"消息本身属性"升级为"前后块类型关系",更精准
   // 类型: user | reasoning | content | toolGroup
-  const renderBlocks: Array<{
-    type: "user" | "reasoning" | "content" | "toolGroup";
-    content?: string;
-    tools?: Message[];
-    id: string;
-    autoCollapse?: boolean;
-  }> = [];
+  const renderBlocks: RenderBlock[] = [];
   {
     let i = 0;
     while (i < messages.length) {
@@ -805,14 +399,14 @@ export default function Home() {
               </div>
             </div>
           )}
-  
+
           {renderBlocks.map((block, index) => {
             const nextBlock = renderBlocks[index + 1];
-  
+
             // === 动态 Margin 终极规则：自适应上下文 ===
             let marginClass = "mb-8";
             const isLast = index === renderBlocks.length - 1;
-  
+
             if (!isLast) {
               // 情况 1：后面还有历史区块
               if (nextBlock?.type === "user") {
@@ -832,7 +426,7 @@ export default function Home() {
                 marginClass = "mb-8";
               }
             }
-  
+
             switch (block.type) {
               case "user":
                 return (
@@ -843,7 +437,7 @@ export default function Home() {
                     </p>
                   </div>
                 );
-  
+
               case "reasoning":
                 return (
                   <div key={block.id} className={marginClass}>
@@ -853,7 +447,7 @@ export default function Home() {
                     />
                   </div>
                 );
-  
+
               case "content":
                 return (
                   <div
@@ -863,7 +457,7 @@ export default function Home() {
                     <MarkdownRenderer content={block.content!} />
                   </div>
                 );
-  
+
               case "toolGroup":
                 return (
                   <motion.div
@@ -904,7 +498,7 @@ export default function Home() {
                                 tool.toolName
                               }</span>
                             </span>
-  
+
                             {isExpanded && (
                               <div className="mt-2 w-full max-w-[600px] border border-slate-200/60 dark:border-zinc-800/60 bg-slate-50/80 dark:bg-zinc-900/50 backdrop-blur-sm rounded-md p-3 space-y-3">
                                 {tool.toolArgs && (
@@ -931,17 +525,17 @@ export default function Home() {
                     </AnimatePresence>
                   </motion.div>
                 );
-  
+
               default:
                 return null;
             }
           })}
-  
+
           {/* === 实时流式 AnimatedLivePanel === */}
           <AnimatedLivePanel reasoning={liveReasoning} content={liveContent} time={thinkTime} />
-  
+
           {/* 旧的文档流内指示器已移除: 替换为 footer 上方悬浮胶囊(见下) */}
-  
+
           {/* Inline Phase Checkpoint (Waiting Approval) */}
           {isWaitingApproval && (
             <div className="mb-8 space-y-3">
@@ -953,7 +547,7 @@ export default function Home() {
                     : "草稿已生成，请确认后启动编译写入；若需调整请提交反馈"}
                 </p>
               </div>
-  
+
               <div className="flex flex-row items-center gap-3">
                 <button
                   onClick={handleApproveAction}
@@ -962,7 +556,7 @@ export default function Home() {
                 >
                   {isConnected ? "同意并进入下一阶段" : "已断开连接"}
                 </button>
-  
+
                 <div className="flex-1 flex items-center gap-2 bg-slate-50/60 dark:bg-zinc-900/40 border border-slate-200/50 dark:border-zinc-700/50 rounded-full px-4 py-1.5">
                   <input
                     type="text"
@@ -987,11 +581,11 @@ export default function Home() {
               </div>
             </div>
           )}
-  
+
           <div ref={chatEndRef} />
           </div>
         </div>
-  
+
         {/* Input Prompt Box area */}
         <footer className="bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky bottom-0 z-50 p-4 shrink-0 relative">
           {/* === 悬浮毛玻璃状态胶囊 (脱离文档流，0抖动) === */}
