@@ -194,18 +194,6 @@ export default function Home() {
     });
   }, [messages, isWaitingApproval, liveReasoning, liveContent, isGenerating]);
 
-  const resetWorkspace = async () => {
-    // 重置 agent state (partial: 不重置 isConnected / tokenCount / currentSessionId / currentSessionInfo)
-    resetForWorkspace();
-    // 重置 page UI state
-    setExpandedTools(new Set());
-    setSelectedToolId(null);
-    setShowPreview(false);
-    resetDrafts();
-    setInputValue("");
-    setFeedbackValue("");
-    isScrolledToBottom.current = true;  // 重置, 准备跟读
-  };
 
   const handleSendPrompt = (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,7 +305,7 @@ export default function Home() {
           }
           setShowPreview((v) => !v);
         }}
-        onResetWorkspace={resetWorkspace}
+        onResetWorkspace={handleCreateSession}
       />
 
       {/* 主区域: 横向 flex 父容器, 左侧 sidebar, 中 chat+input, 右侧 preview */}

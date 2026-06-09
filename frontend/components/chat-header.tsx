@@ -90,7 +90,7 @@ export default function ChatHeader({
           onClick={onResetWorkspace}
           className="px-3 py-1 text-xs font-semibold border border-slate-200 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded transition-colors cursor-pointer text-slate-600 dark:text-zinc-300"
         >
-          重置会话
+          新建会话
         </button>
       </div>
     </header>
