@@ -140,13 +140,13 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 你的任务：根据第一阶段确定的样式特征与用户的需求内容，编写出用于填入 Word 的 Markdown 草稿文件。
 规则：
 1. 你现在只能生成、读取和解析 Markdown 草稿，不能编辑 docx。
-2. 请用 write_markdown_draft 按文档区域生成 Markdown 片段，保存到 out/drafts；不要写成包含全流程说明的单个自由草稿。
+2. 请针对每个需要填写的文档区域，依次调用 write_markdown_draft 生成对应的 Markdown 文件（如 03_flowchart.md, 04_experiment_process.md, 06_ai_disclosure.md 等），保存到 out/drafts。若无法一次性生成，必须分多轮连续调用工具生成，直至把所有需要填写的区域草稿全部写完。
 3. 长正文块可以单独生成 Markdown 文件，例如 experiment_platform.md 等。
 4. 每个片段只写最终要进入 Word 的内容，不要包含编辑计划。
 5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。先用 analyze_image_content 理解图片内容再写描述，不要仅凭文件名猜测。
 6. 如需参考外部代码、报告 md 文件或测试用例等内容作为草稿素材，使用 read 工具读取。
 7. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
-8. 列出草稿结构后，你必须立刻停止回答，等待用户审核草稿。用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
+8. 只有在所有规划的草稿文件都通过 write_markdown_draft 写入磁盘后，才允许展示整体草稿结构，并用简短文字告知用户已完成全部草稿的写入，然后停止回答等待用户审核。在用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
 """.strip()
     else:
         state_rule = """
