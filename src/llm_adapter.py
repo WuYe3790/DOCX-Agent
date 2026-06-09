@@ -193,6 +193,16 @@ class LLMClientAdapter:
             # 商汤支持 tool_choice
             if "tool_choice" in kwargs:
                 request_kwargs["tool_choice"] = kwargs["tool_choice"]
+        elif self.provider == "agnes":
+            # Agnes thinking 注入: extra_body={"chat_template_kwargs": {"enable_thinking": True}}
+            # probe 验证: 顶层 chat_template_kwargs kwarg 不行 (OpenAI SDK 拒绝)
+            if self.thinking_type and self.thinking_type != "disabled":
+                request_kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": True}
+                }
+            # Agnes 也支持 tool_choice
+            if "tool_choice" in kwargs:
+                request_kwargs["tool_choice"] = kwargs["tool_choice"]
 
         # 补充并覆盖其它自定义参数
         for k, v in kwargs.items():

@@ -476,6 +476,8 @@ async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: 
         start_config["thinking_type"] = adapter.get_thinking_type()
     elif provider == "sensenova":
         start_config["reasoning_effort"] = adapter.get_reasoning_effort()
+    elif provider == "agnes":
+        start_config["thinking_type"] = adapter.get_thinking_type()
 
     append_log(log_path, "启动配置 (Web 终端)", start_config)
     append_log(log_path, "用户输入", user_prompt)
