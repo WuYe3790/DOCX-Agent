@@ -269,14 +269,30 @@ def test_backward_compat_class_methods():
 
 def test_registry_placeholders_raise():
     """Step 1 当时:build_client + pick_capable_adapter 都是占位。
-    Step 2 落地 pick_capable_adapter 后,只剩 build_client 仍是 Step 5 的占位。"""
+    Step 2 落地 pick_capable_adapter,Step 5 落地 build_client(从 dict 构造 client)。
+    本测试现在断言:build_client 能从 dict config 正确构造,且对空 config 显式抛错。"""
     from llm_adapter.registry import build_client
+    # 空 config → 缺 api_key → 显式 RuntimeError(fail-loud,不静默成功)
     try:
         build_client({})
-        raise AssertionError("build_client 在 Step 5 之前应抛 NotImplementedError")
-    except NotImplementedError:
-        pass
-    print("[OK] registry 占位:build_client 仍待 Step 5 落地")
+        raise AssertionError("空 config 应触发 RuntimeError(缺 api_key)")
+    except RuntimeError as e:
+        assert "API Key" in str(e), "错误信息应明确指向 API Key 缺失"
+
+    # 合法 config → 能成功构造,provider 默认走 deepseek
+    valid_cfg = {
+        "providers": {
+            "deepseek": {
+                "api_key": "sk-test",
+                "base_url": "https://api.deepseek.com",
+                "model": "deepseek-v4-flash",
+            }
+        }
+    }
+    client = build_client(valid_cfg, override_provider="deepseek")
+    assert client.get_provider() == "deepseek"
+    assert client.get_model_name() == "deepseek-v4-flash"
+    print("[OK] registry: build_client 从 dict 正确构造 + 空 config 显式失败")
 
 
 if __name__ == "__main__":

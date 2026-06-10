@@ -47,6 +47,30 @@ _DEFAULT_QUIRKS: dict[str, tuple] = {
 _FALLBACK_QUIRKS: tuple = ()
 
 
+# Step 5: provider 名 → 请求注入字段的默认表(消灭 create_chat_completion 的 if-else)
+# 三个字段共同决定一个 provider 的请求"形状":
+#   - extra_body_template: JSON 模板,${var} 占位由 _render 渲染;为 None 时不注入 extra_body
+#   - top_level_kwargs:    要塞到 chat.completions.create 顶层的 kwarg map(值可为 ${var} 模板)
+#   - forward_tool_choice: 是否透传 caller 的 tool_choice kwarg
+# 这三个字段都可在 config.json providers.<name>.{extra_body_template,top_level_kwargs,
+# forward_tool_choice} 显式覆盖默认表。
+# extra_body 仅在 thinking != "disabled" 时注入(与旧行为一致)。
+_DEFAULT_EXTRA_BODY_TEMPLATES: dict[str, str] = {
+    "deepseek": '{"thinking": {"type": "${thinking}"}}',
+    "agnes":    '{"chat_template_kwargs": {"enable_thinking": true}}',
+    # sensenova 不需要 extra_body(reasoning_effort 走顶层)
+}
+_DEFAULT_TOP_LEVEL_KWARGS: dict[str, dict] = {
+    "sensenova": {"reasoning_effort": "${reasoning_effort}"},
+}
+_DEFAULT_FORWARD_TOOL_CHOICE: dict[str, bool] = {
+    "sensenova": True,
+    "agnes":     True,
+    # deepseek 不在表里 → 默认 False(与旧 if-else 一致:deepseek 分支不处理 tool_choice)
+    # (但 caller 的 tool_choice 仍会走最后的 kwarg 透传,行为不变)
+}
+
+
 class LLMClient:
     """模型适配层:统一管理不同大模型服务商(如 DeepSeek, SenseNova, Agnes)的连接与调用细节。"""
 
@@ -175,7 +199,12 @@ class LLMClient:
 
             self.base_url = self.base_url or "https://api.openai.com/v1"
             self.model = self.model or "gpt-4o"
-            self.thinking_type = "disabled"
+            # Step 5: 从 provider block 读 thinking / reasoning_effort,让 v2 config 对新接入
+            # OpenAI 兼容 provider 也能用 extra_body_template / top_level_kwargs 模板渲染。
+            # 旧行为:未知 provider 硬编码 thinking="disabled",reasoning_effort=None — 这是限制,
+            # 不是契约。修复后已知 3 个 provider 的行为不变(它们走 if/elif 分支),只放宽未知 provider。
+            self.thinking_type = provider_config.get("thinking", "disabled")
+            self.reasoning_effort = self.reasoning_effort or provider_config.get("reasoning_effort")
 
         # 检查 api_key 是否存在
         if not self.api_key:
@@ -218,6 +247,21 @@ class LLMClient:
             self._quirks = tuple(provider_block["quirks"])
         else:
             self._quirks = _DEFAULT_QUIRKS.get(self.provider, _FALLBACK_QUIRKS)
+
+        # 8. Step 5: 解析请求注入三件套(extra_body_template / top_level_kwargs / forward_tool_choice)
+        # 同 capabilities/quirks 模式:provider block 显式 > _DEFAULT_* 表 > 空/False
+        self._extra_body_template = (
+            provider_block.get("extra_body_template")
+            or _DEFAULT_EXTRA_BODY_TEMPLATES.get(self.provider)
+        )
+        if "top_level_kwargs" in provider_block:
+            self._top_level_kwargs = dict(provider_block["top_level_kwargs"])
+        else:
+            self._top_level_kwargs = dict(_DEFAULT_TOP_LEVEL_KWARGS.get(self.provider, {}))
+        if "forward_tool_choice" in provider_block:
+            self._forward_tool_choice = bool(provider_block["forward_tool_choice"])
+        else:
+            self._forward_tool_choice = _DEFAULT_FORWARD_TOOL_CHOICE.get(self.provider, False)
 
     # ────────────────────────── 公开 getter(旧接口,保留) ──────────────────────────
 
@@ -279,6 +323,35 @@ class LLMClient:
         return self._quirks
 
     @property
+    def extra_body_template(self):
+        """Step 5: extra_body 的 JSON 模板(${var} 占位由 _render 渲染)。
+
+        优先级:provider block "extra_body_template" > _DEFAULT_EXTRA_BODY_TEMPLATES > None
+        None 时表示该 provider 不需要注入 extra_body。
+        约定:只在 thinking != "disabled" 时实际注入(与旧行为一致)。
+        """
+        return self._extra_body_template
+
+    @property
+    def top_level_kwargs(self) -> dict:
+        """Step 5: 注入到 chat.completions.create 顶层的 kwarg map。值可为 ${var} 模板。
+
+        优先级:provider block "top_level_kwargs" > _DEFAULT_TOP_LEVEL_KWARGS > {}
+        典型用法:sensenova {"reasoning_effort": "${reasoning_effort}"}
+        """
+        return self._top_level_kwargs
+
+    @property
+    def forward_tool_choice(self) -> bool:
+        """Step 5: 是否透传 caller 的 tool_choice kwarg。
+
+        优先级:provider block "forward_tool_choice" > _DEFAULT_FORWARD_TOOL_CHOICE > False
+        注意:即使返回 False,caller 的 tool_choice 仍会走 build_request_kwargs 最后的
+        kwarg 透传循环(与旧 if-else 行为一致 — deepseek 没专门处理但 caller 传入仍透传)。
+        """
+        return self._forward_tool_choice
+
+    @property
     def raw_config(self) -> dict:
         """返回原始 config.json 字典。给 registry.pick_capable_adapter 用,
         不应该被工具层(basic_tools/*)直接读取。"""
@@ -290,76 +363,28 @@ class LLMClient:
         重新构造同 config 下不同 provider 的 LLMClient 用。"""
         return self._config_path
 
-    # ────────────────────────── 请求构建(旧 if-else,Step 5 替换) ──────────────────────────
+    # ────────────────────────── 请求构建(Step 5: 数据驱动,消灭 if-else) ──────────────────────────
 
     def create_chat_completion(self, messages, tools=None, **kwargs):
-        """创建对话补全:自动处理不同厂商特有的参数(例如 DeepSeek 的 thinking 块)"""
-        request_kwargs = {
-            "model": self.model,
-            "messages": messages,
-        }
-        if tools:
-            request_kwargs["tools"] = tools
+        """创建对话补全。
 
-        # 不同厂商的参数适配处理(Step 5 会替换为 build_request_kwargs)
-        if self.provider == "deepseek":
-            if self.thinking_type and self.thinking_type != "disabled":
-                request_kwargs["extra_body"] = {"thinking": {"type": self.thinking_type}}
-        elif self.provider == "sensenova":
-            reasoning_effort = kwargs.get("reasoning_effort") or self.reasoning_effort
-            if reasoning_effort:
-                request_kwargs["reasoning_effort"] = reasoning_effort
-            if "tool_choice" in kwargs:
-                request_kwargs["tool_choice"] = kwargs["tool_choice"]
-        elif self.provider == "agnes":
-            if self.thinking_type and self.thinking_type != "disabled":
-                request_kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": True}
-                }
-            if "tool_choice" in kwargs:
-                request_kwargs["tool_choice"] = kwargs["tool_choice"]
+        Step 5: 通过 build_request_kwargs 数据驱动构造 — 注入逻辑由 3 个 property
+        (extra_body_template / top_level_kwargs / forward_tool_choice) 决定,
+        provider-specific if-else 已彻底消灭。新接入 OpenAI 兼容模型只需在
+        config.json 写 4 行(api_key / base_url / model / 可选 capabilities),
+        其余字段从 _DEFAULT_* 表或 profile 默认值得来。
+        """
+        from .request_builder import build_request_kwargs  # 延迟 import 避免循环依赖
+        req = build_request_kwargs(self, messages, tools, **kwargs)
+        return self.client.chat.completions.create(**req)
 
-        # 补充并覆盖其它自定义参数
-        for k, v in kwargs.items():
-            if k not in request_kwargs:
-                request_kwargs[k] = v
-
-        return self.client.chat.completions.create(**request_kwargs)
-
-    # ────────────────────────── 内部辅助(Step 1 测试用) ──────────────────────────
+    # ────────────────────────── 内部辅助(Step 1 parity 测试用) ──────────────────────────
 
     def _build_request_kwargs(self, messages, tools=None, **kwargs) -> dict:
         """暴露请求 kwargs 构建过程供回归测试比对。不发起真实 API 调用。
 
-        实现策略:复制 create_chat_completion 的构建逻辑,只是不调 self.client。
-        Step 5 改造为 build_request_kwargs(cfg, ...) 后,这个方法会变成它的薄包装。
+        Step 5 后:这是 build_request_kwargs 的薄包装,parity 测试因此能验证
+        "数据驱动版与旧 _llm_adapter_legacy 的 if-else 版字节级一致"。
         """
-        request_kwargs = {
-            "model": self.model,
-            "messages": messages,
-        }
-        if tools:
-            request_kwargs["tools"] = tools
-
-        if self.provider == "deepseek":
-            if self.thinking_type and self.thinking_type != "disabled":
-                request_kwargs["extra_body"] = {"thinking": {"type": self.thinking_type}}
-        elif self.provider == "sensenova":
-            reasoning_effort = kwargs.get("reasoning_effort") or self.reasoning_effort
-            if reasoning_effort:
-                request_kwargs["reasoning_effort"] = reasoning_effort
-            if "tool_choice" in kwargs:
-                request_kwargs["tool_choice"] = kwargs["tool_choice"]
-        elif self.provider == "agnes":
-            if self.thinking_type and self.thinking_type != "disabled":
-                request_kwargs["extra_body"] = {
-                    "chat_template_kwargs": {"enable_thinking": True}
-                }
-            if "tool_choice" in kwargs:
-                request_kwargs["tool_choice"] = kwargs["tool_choice"]
-
-        for k, v in kwargs.items():
-            if k not in request_kwargs:
-                request_kwargs[k] = v
-
-        return request_kwargs
+        from .request_builder import build_request_kwargs
+        return build_request_kwargs(self, messages, tools, **kwargs)

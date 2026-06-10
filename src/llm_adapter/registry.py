@@ -1,28 +1,67 @@
 """Provider Profiles 注册表 + 客户端工厂 + capability fallback
 
-Step 5 落地 PROFILES + build_client + auto-migration 表。
-Step 2 落地 pick_capable_adapter 的真实实现。
-Step 1 仅留签名 + NotImplementedError 占位,避免上层 import 失败。
+Step 5 落地 PROFILES(documentation 性质) + build_client 公开工厂。
+Step 2 落地 pick_capable_adapter 的完整实现。
+
+关于 PROFILES:
+    Plan 原设计 PROFILES 是 "provider block 继承默认值" 的运行时机制。
+    实际实现中,provider.py 的 _DEFAULT_CAPABILITIES / _DEFAULT_REASONING_FIELDS /
+    _DEFAULT_QUIRKS / _DEFAULT_EXTRA_BODY_TEMPLATES / _DEFAULT_TOP_LEVEL_KWARGS /
+    _DEFAULT_FORWARD_TOOL_CHOICE 这 6 个表 + fallback 已经提供了等价能力 —
+    未知 provider 自动得到 OpenAI 兼容的合理默认。
+
+    因此 PROFILES 在这里是 **v2 config schema 的引导文档**:声明"openai_compatible"
+    profile 是合法值,让用户写 v2 config 时知道可以这样写。
+    LLMClient.__init__ 不强制读 profile 字段 — provider block 不显式声明
+    的字段会通过 _DEFAULT_* 表 fallback,等价于 "openai_compatible" 默认。
 """
 
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .provider import LLMClient
 
 
-# Step 5 会填充:openai_compatible / anthropic_compatible / ...
-PROFILES: dict[str, dict] = {}
+PROFILES: dict[str, dict] = {
+    # v2 config schema 的合法 profile 名(documentation 性质)
+    # 字段值反映 provider.py 的 _DEFAULT_* fallback,作为 "OpenAI 兼容" 默认行为文档
+    "openai_compatible": {
+        "capabilities": ["chat", "tools"],
+        "reasoning_field": "delta.reasoning_content",
+        "forward_tool_choice": False,
+        "quirks": [],
+        "extra_body_template": None,
+        "top_level_kwargs": {},
+    },
+}
 
 
 def build_client(config: dict, override_provider: Optional[str] = None) -> "LLMClient":
-    """从 config dict 构造 LLMClient。Step 5 落地完整实现(含 PROFILES 继承 + auto-migration)。
+    """从 config dict 构造 LLMClient(Step 5 公开工厂)。
 
-    Step 1 占位:抛 NotImplementedError。当前所有 import 路径仍走 LLMClient() 构造函数。
+    用法:不想先把 config 写到文件就能构造 client,例如未来从远程配置中心拉取 dict
+    后立即构造。pick_capable_adapter 在 Step 2 仍走 LLMClient(config_path, ...) 直接路径,
+    因为它已经有 config_path。
+
+    实现:写临时 config.json 到 tempdir,然后 LLMClient(tmp_path, provider_override=...)。
+    这绕过对 LLMClient.__init__ 的入侵性改动(加 config_data 参数会触发整套测试重跑),
+    用稳定 API 包装。
+
+    Args:
+        config: 完整的 config dict(含 "provider" 顶层字段和 "providers" 嵌套块)
+        override_provider: 显式指定 active provider,覆盖 config["provider"]
+    Returns:
+        LLMClient 实例
     """
-    raise NotImplementedError("build_client 在 Step 5 落地;Step 1-4 仍用 LLMClient() 直接构造")
+    from .provider import LLMClient
+    tmp_path = Path(tempfile.mkdtemp(prefix="docx_agent_buildclient_")) / "config.json"
+    tmp_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+    return LLMClient(str(tmp_path), provider_override=override_provider)
 
 
 def pick_capable_adapter(current: "LLMClient", capability: str) -> Optional["LLMClient"]:

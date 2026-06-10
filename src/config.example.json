@@ -1,0 +1,63 @@
+{
+  "_doc": "v2 config schema 示例 — 适用于 docx-agent。Step 5 重构(refactor/llm-adapter-registry)落地后,新接入 LLM provider 只需在 providers 块加 4 行(api_key/base_url/model/可选 profile),无需改任何 .py 代码。",
+
+  "provider": "通用接口",
+
+  "provider_profiles": {
+    "openai_compatible": {
+      "_doc": "v2 合法 profile 名 — provider block 不显式声明的字段,由 src/llm_adapter/provider.py 的 _DEFAULT_* 表 fallback 到等价默认。",
+      "capabilities": ["chat", "tools"],
+      "reasoning_field": "delta.reasoning_content",
+      "forward_tool_choice": false,
+      "quirks": [],
+      "extra_body_template": null,
+      "top_level_kwargs": {}
+    }
+  },
+
+  "providers": {
+
+    "通用接口": {
+      "_doc": "★ 4 行接入新 OpenAI 兼容模型的最小示例 — 这就够了,跑得起来",
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://your-endpoint.example.com/v1",
+      "model": "your-model-name"
+    },
+
+    "通用接口_带视觉": {
+      "_doc": "需要 vision 能力时,声明 capabilities 即可让 analyze_image_content 工具走它",
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://vision-endpoint.example.com/v1",
+      "model": "your-vision-model",
+      "capabilities": ["chat", "tools", "vision"]
+    },
+
+    "通用接口_自定义reasoning路径": {
+      "_doc": "新 provider 的 reasoning 字段在自定义 dotted-path 时声明 reasoning_field",
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://endpoint.example.com/v1",
+      "model": "your-model",
+      "reasoning_field": "delta.model_extra.my_custom_reasoning"
+    },
+
+    "通用接口_完整定制": {
+      "_doc": "展示所有 v2 字段(等价于 sensenova 的配置形态)",
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://endpoint.example.com/v1",
+      "model": "your-model",
+      "thinking": "enabled",
+      "reasoning_effort": "high",
+      "capabilities": ["chat", "tools", "vision", "reasoning"],
+      "reasoning_field": "delta.model_extra.reasoning",
+      "forward_tool_choice": true,
+      "extra_body_template": "{\"thinking\": {\"type\": \"${thinking}\"}}",
+      "top_level_kwargs": { "reasoning_effort": "${reasoning_effort}" },
+      "quirks": ["stream_empty_retry"]
+    }
+
+  }
+}
