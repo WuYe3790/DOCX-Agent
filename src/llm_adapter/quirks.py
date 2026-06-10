@@ -50,3 +50,31 @@ def apply_quirk(name: str, ctx: dict) -> QuirkDirective:
             f"Unknown quirk '{name}'. Registered: {sorted(QUIRKS) or '(none yet)'}"
         )
     return QUIRKS[name](ctx)
+
+
+# ────────────────────────── 已注册 quirks ──────────────────────────
+
+@register_quirk("stream_empty_retry")
+def _stream_empty_retry(ctx: dict) -> QuirkDirective:
+    """SenseNova 偶发流静默关闭:finish_reason=None + 空 tool_calls。
+
+    复现:session-20260609-205746 第 13/14 轮(reasoning-only 死循环)。
+    历史:旧 agent.py:540-561 用 inline if-else 处理,Step 4 抽到这里。
+
+    职责边界:
+    - 本函数只判断"这一轮响应是否应该 retry",返回 QuirkDirective
+    - retry budget 计数 + 日志 + continue 重发请求 → 仍归 agent 管(全局预算)
+
+    ctx 字段(由 agent.py 传入):
+      - finish_reason: server 给的 finish_reason 值(可能 None)
+      - tool_calls_map: 本轮累积的 tool_calls 字典
+      - accumulated_content: 本轮累积的 content 字符串
+      - accumulated_reasoning: 本轮累积的 reasoning 字符串
+
+    返回:
+      - RETRY_REQUEST + reason="stream_incomplete":检测到静默关闭,建议 retry
+      - CONTINUE:正常路径,不做特殊处理
+    """
+    if ctx["finish_reason"] is None and not ctx["tool_calls_map"]:
+        return QuirkDirective(QuirkAction.RETRY_REQUEST, reason="stream_incomplete")
+    return QuirkDirective(QuirkAction.CONTINUE)

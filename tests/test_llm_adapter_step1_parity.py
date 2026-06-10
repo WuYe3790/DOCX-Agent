@@ -161,9 +161,11 @@ def test_quirk_directive_frozen():
 
 
 def test_quirks_registry_empty_in_step1():
+    """Step 1 当时:QUIRKS 应为空。
+    Step 4 后:stream_empty_retry 已注册,断言收窄到 'QUIRKS 至少含 stream_empty_retry'。"""
     from llm_adapter.quirks import QUIRKS
-    assert len(QUIRKS) == 0, f"Step 1 不应注册任何 quirk,实际有 {list(QUIRKS)}"
-    print("[OK] QUIRKS empty in Step 1")
+    assert "stream_empty_retry" in QUIRKS, "Step 4 后 stream_empty_retry 应已注册"
+    print("[OK] QUIRKS 含 Step 4 注册的 stream_empty_retry")
 
 
 def test_apply_quirk_unknown_raises():
@@ -215,14 +217,15 @@ def test_reasoning_field_matches_old_agent_if_else():
 
 
 def test_quirks_property_empty_in_step1():
-    """Step 1: quirks 暂为空 tuple,Step 4 才注册 stream_empty_retry"""
-    os.environ["LLM_PROVIDER"] = "sensenova"
+    """Step 1 当时:sensenova.quirks 应为空 tuple(占位)。
+    Step 4 后:sensenova 默认启用 stream_empty_retry。断言改为读 deepseek(无默认 quirk)。"""
+    os.environ["LLM_PROVIDER"] = "deepseek"
     try:
         ad = new_pkg.LLMClientAdapter(CONFIG)
     finally:
         os.environ.pop("LLM_PROVIDER", None)
     assert ad.quirks == ()
-    print("[OK] quirks property 空")
+    print("[OK] deepseek.quirks 空(Step 4 后:无默认 quirk)")
 
 
 def test_raw_config_accessible():

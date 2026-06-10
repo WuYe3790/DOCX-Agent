@@ -38,6 +38,15 @@ _DEFAULT_REASONING_FIELDS: dict[str, str] = {
 _FALLBACK_REASONING_FIELD = "delta.reasoning_content"   # OpenAI 通用兼容
 
 
+# Step 4: provider 名 → 默认启用的 quirks tuple
+# 同样可被 config.json providers.<name>.quirks 字段覆盖(空列表也算覆盖,显式禁用所有 quirk)。
+# 历史:旧 agent.py:540-561 直接 inline 检查 sensenova 行为,Step 4 抽成命名 quirk。
+_DEFAULT_QUIRKS: dict[str, tuple] = {
+    "sensenova": ("stream_empty_retry",),   # 复现 session-20260609-205746
+}
+_FALLBACK_QUIRKS: tuple = ()
+
+
 class LLMClient:
     """模型适配层:统一管理不同大模型服务商(如 DeepSeek, SenseNova, Agnes)的连接与调用细节。"""
 
@@ -201,6 +210,15 @@ class LLMClient:
             or _DEFAULT_REASONING_FIELDS.get(self.provider, _FALLBACK_REASONING_FIELD)
         )
 
+        # 7. Step 4: 解析 quirks
+        # 优先级:provider block 显式 "quirks"(即使空列表 = 显式禁用) > _DEFAULT_QUIRKS > 空 tuple
+        # 显式空列表的语义:用户明确告诉系统"这个 provider 不要启用任何 quirk"
+        # (例如关掉 sensenova 的 stream_empty_retry 自查问题来源)。
+        if "quirks" in provider_block:
+            self._quirks = tuple(provider_block["quirks"])
+        else:
+            self._quirks = _DEFAULT_QUIRKS.get(self.provider, _FALLBACK_QUIRKS)
+
     # ────────────────────────── 公开 getter(旧接口,保留) ──────────────────────────
 
     def get_model_name(self) -> str:
@@ -249,11 +267,16 @@ class LLMClient:
 
     @property
     def quirks(self) -> tuple:
-        """启用的 quirk 名列表。Step 4 会改成读 cfg.quirks。
+        """启用的 quirk 名 tuple。Step 4 实现:
 
-        Step 1 占位实现:返回空 tuple,行为完全由 agent.py 现有的 if-else 决定。
+          1. config.json providers.<name>.quirks 显式声明优先(空列表 = 显式禁用所有)
+          2. 否则用 _DEFAULT_QUIRKS 表(sensenova → stream_empty_retry,其他无)
+          3. 都没有则空 tuple
+
+        实例属性 self._quirks 在 __init__ 缓存。agent.py 流式循环每轮检查一次,
+        property 直接 return 避免重复 dict 查找。
         """
-        return ()
+        return self._quirks
 
     @property
     def raw_config(self) -> dict:
