@@ -19,6 +19,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))  # tests/ 是子目录, src/ 在仓库根
 
 from fastapi.testclient import TestClient
@@ -27,10 +29,25 @@ import server  # 触发 app 初始化 (含 SESSIONS_ROOT = Path("out") / "sessio
 
 # === 隔离: 把 SESSIONS_ROOT 重定向到 tmpdir, 避免污染真实 out/sessions ===
 TMP_ROOT = Path(tempfile.mkdtemp(prefix="docx_agent_test_step2_"))
-server.SESSIONS_ROOT = TMP_ROOT
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
+server.SESSIONS_ROOT = TMP_ROOT
 
 client = TestClient(server.app)
+
+
+# === Fixture: 隔离本 file 的 test 跑时改 SESSIONS_ROOT, 跑完恢复 saved ===
+# 根因: server.SESSIONS_ROOT 是 module-level 全局, test_step3 / test_step5 等
+# 也在 import 时改它。pytest import 顺序不保证, 跑在 test_step3 之后时
+# SESSIONS_ROOT 已被它改成自己的 tmpdir — 但本 file test 2 用 TMP_ROOT
+# 算路径找 session, 找不到就 fail。
+# 修法: fixture 在 test 2 跑前临时设 SESSIONS_ROOT = TMP_ROOT, 跑完恢复
+# saved。**不**用 autouse, 避免污染 test_step3 / test_step5。
+@pytest.fixture
+def isolate_sessions_root():
+    saved = server.SESSIONS_ROOT
+    server.SESSIONS_ROOT = TMP_ROOT
+    yield
+    server.SESSIONS_ROOT = saved
 
 
 def test_start_sends_session_created():
@@ -46,8 +63,13 @@ def test_start_sends_session_created():
     print("[OK] Test 1: start → session_created (含 session_id + docx_path)")
 
 
-def test_start_creates_session_dir_with_3_json():
-    """Test 2: start 后 out/sessions/<id>/ 应含 3 JSON (fire-and-forget Checkpoint 验证)"""
+def test_start_creates_session_dir_with_3_json(isolate_sessions_root):
+    """Test 2: start 后 out/sessions/<id>/ 应含 3 JSON (fire-and-forget Checkpoint 验证)
+
+    注: server.SESSIONS_ROOT 是 module-level 全局, test_step3 / test_step5 等会改它.
+    跑在它们之后时, server 写 session 到它们的 tmpdir, 本 test 用 TMP_ROOT 算路径
+    会找不到. 修法: 用 isolate_sessions_root fixture 临时设回 TMP_ROOT, 跑完恢复.
+    """
     with client.websocket_connect("/api/ws/agent") as ws:
         ws.send_json({"type": "start", "prompt": "请分析", "docx_path": "/path/to/template.docx"})
         frame = ws.receive_json()
