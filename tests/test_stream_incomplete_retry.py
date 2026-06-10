@@ -65,6 +65,13 @@ class StreamingMockLLM:
         self.scripted = list(scripted_responses)
         self.call_count = 0
         self.provider = "sensenova"
+        # Step 3 兼容:agent.py 改用 self.llm.reasoning_field + extract_reasoning。
+        # 这里测试用 MockDelta 的 reasoning 数据放在 reasoning_content 字段
+        # (见 MockDelta.__init__),故选 deepseek path 路径让 agent 能正确提取。
+        self.reasoning_field = "delta.reasoning_content"
+        # Step 4 兼容:agent.py 改用 self.llm.quirks + apply_quirk。
+        # MockLLM 模拟 sensenova,启用 stream_empty_retry 让 Case 2/3 行为不变。
+        self.quirks = ("stream_empty_retry",)
 
     def get_provider(self): return self.provider
     def get_model_name(self): return "sensenova-test"
@@ -116,6 +123,8 @@ def test_init_field_exists():
     """Case 0: __init__ 加的 _stream_incomplete_retries 字段存在且为 0"""
     class StubLLM:
         provider = "deepseek"
+        reasoning_field = "delta.reasoning_content"   # Step 3 兼容:agent 流式循环用它
+        quirks = ()                                    # Step 4 兼容:deepseek 无 quirk
         def get_provider(self): return "deepseek"
         def get_model_name(self): return "stub"
         def get_thinking_type(self): return "disabled"

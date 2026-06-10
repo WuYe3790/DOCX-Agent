@@ -472,12 +472,14 @@ async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: 
         "interface": "websocket_api",
         "docx_path": docx_path,
     }
-    if provider == "deepseek":
-        start_config["thinking_type"] = adapter.get_thinking_type()
-    elif provider == "sensenova":
-        start_config["reasoning_effort"] = adapter.get_reasoning_effort()
-    elif provider == "agnes":
-        start_config["thinking_type"] = adapter.get_thinking_type()
+    # Step 6: 通用读取 adapter 状态(替代旧 if-provider 分支)
+    # 任何 provider 只要 thinking_type/reasoning_effort 有效就记录, 不再需要按名分支
+    thinking_type = adapter.get_thinking_type()
+    if thinking_type and thinking_type != "disabled":
+        start_config["thinking_type"] = thinking_type
+    reasoning_effort = adapter.get_reasoning_effort()
+    if reasoning_effort:
+        start_config["reasoning_effort"] = reasoning_effort
 
     append_log(log_path, "启动配置 (Web 终端)", start_config)
     append_log(log_path, "用户输入", user_prompt)

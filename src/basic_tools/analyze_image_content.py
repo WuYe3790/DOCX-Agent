@@ -5,10 +5,12 @@ from pathlib import Path
 
 try:
     from llm_adapter import LLMClientAdapter
+    from llm_adapter.registry import pick_capable_adapter
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from llm_adapter import LLMClientAdapter
+    from llm_adapter.registry import pick_capable_adapter
 
 
 def analyze_image_content(image_path: str, query: str = "分析图片内容") -> str:
@@ -43,25 +45,17 @@ def analyze_image_content(image_path: str, query: str = "分析图片内容") ->
 
     try:
         adapter = LLMClientAdapter()
-        vision_adapter = adapter
-
-        if adapter.get_provider() not in {"sensenova", "openai", "gemini"}:
-            has_sensenova = "sensenova" in adapter.config.get("providers", {})
-            if has_sensenova:
-                old_provider = os.environ.get("LLM_PROVIDER")
-                os.environ["LLM_PROVIDER"] = "sensenova"
-                try:
-                    vision_adapter = LLMClientAdapter()
-                finally:
-                    if old_provider is not None:
-                        os.environ["LLM_PROVIDER"] = old_provider
-                    else:
-                        os.environ.pop("LLM_PROVIDER", None)
-            else:
-                return json.dumps({
-                    "status": "error",
-                    "message": f"当前模型提供商 '{adapter.get_provider()}' 不支持图像理解，且 config.json 的 providers 中未配置 sensenova 等视觉大模型支持。"
-                }, ensure_ascii=False, indent=2)
+        # Step 2: 用 capability-driven 工厂选 vision-capable provider
+        # — 替代旧 {"sensenova","openai","gemini"} 硬编码白名单 + os.environ mutation
+        vision_adapter = pick_capable_adapter(adapter, "vision")
+        if vision_adapter is None:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"当前模型提供商 '{adapter.get_provider()}' 不支持图像理解,"
+                    "且 config.json 的 providers 中未配置任何具备 vision capability 的模型。"
+                )
+            }, ensure_ascii=False, indent=2)
 
         messages = [{
             "role": "user",
