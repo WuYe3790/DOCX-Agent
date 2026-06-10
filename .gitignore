@@ -10,3 +10,9 @@ venv/
 out/
 文档格式测试/
 scratch/
+
+# 临时 / 测试文件
+COMMIT_EDITMSG.tmp
+test_stream.html
+新建 文本文档.txt
+示例.txt
