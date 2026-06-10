@@ -398,6 +398,29 @@ class LLMClient:
         req = build_request_kwargs(self, messages, tools, **kwargs)
         return self.client.chat.completions.create(**req)
 
+    def create_chat_completion_blocking(
+        self, *, messages, tools=None, **kwargs
+    ) -> "openai.types.ChatCompletion":
+        """非流式: 一次性拿完整 response 对象(供 agent.py 流式 stall 时降级用)。
+
+        与 create_chat_completion 的区别:
+        - 显式设 stream=False, 服务器一次性返回完整 JSON, 不走 SSE 协议
+        - 返回 ChatCompletion 对象(非 iterator), response.choices[0].message 含
+          完整 content / tool_calls / reasoning
+        - usage 挂在 response.usage(无需 stream_options.include_usage)
+        - 适合 SSE 协议层有 bug 的 provider(如 SenseNova reasoning→content 切换 stall)
+
+        设计: 复用 build_request_kwargs(Step 5 数据驱动), 仅在最后强制覆盖
+        stream=False, 不修改 request_builder。
+
+        调用方处理方式: agent.py 把 ChatCompletion 拆成 reasoning / content /
+        tool_call 事件 yield 给下游, 主循环对"流式 / 非流式"无感。
+        """
+        from .request_builder import build_request_kwargs
+        req = build_request_kwargs(self, messages, tools, **kwargs)
+        req["stream"] = False
+        return self.client.chat.completions.create(**req)
+
     # ────────────────────────── 内部辅助(Step 1 parity 测试用) ──────────────────────────
 
     def _build_request_kwargs(self, messages, tools=None, **kwargs) -> dict:

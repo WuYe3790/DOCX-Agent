@@ -62,10 +62,12 @@ export default function Home() {
     liveContent,
     thinkTime,
     currentSessionId,
+    streamMode,
     start: startAgentSession,
     stop: stopAgentSession,
     sendContinue,
     sendApprove,
+    sendSetStreamMode,
     resetForCreate,
     resetForWorkspace,
     hasActiveConnection,
@@ -292,6 +294,7 @@ export default function Home() {
         showPreview={showPreview}
         sidebarOpen={sessionSidebarOpen}
         currentSessionId={currentSessionId}
+        streamMode={streamMode}
         onToggleSidebar={() => {
           const nextOpen = !sessionSidebarOpen;
           setSessionSidebarOpen(nextOpen);
@@ -306,6 +309,7 @@ export default function Home() {
           setShowPreview((v) => !v);
         }}
         onResetWorkspace={handleCreateSession}
+        onToggleStreamMode={() => sendSetStreamMode(!streamMode)}
       />
 
       {/* 主区域: 横向 flex 父容器, 左侧 sidebar, 中 chat+input, 右侧 preview */}

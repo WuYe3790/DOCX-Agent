@@ -10,14 +10,16 @@ interface ChatHeaderProps {
   showPreview: boolean;
   sidebarOpen: boolean;
   currentSessionId: string | null;
+  streamMode: boolean;
   onToggleSidebar: () => void;
   onTogglePreview: () => void;
   onResetWorkspace: () => void;
+  onToggleStreamMode: () => void;
 }
 
 // === ChatHeader: 顶部 Header Bar ===
 // 左侧: 会话管理按钮 + 标题 + docxPath 路径徽章
-// 右侧: 连接状态点 + token 进度条 + 草稿切换按钮 + 重置按钮
+// 右侧: 连接状态点 + token 进度条 + 流式/非流式切换 + 草稿切换 + 重置按钮
 export default function ChatHeader({
   docxPath,
   isConnected,
@@ -26,9 +28,11 @@ export default function ChatHeader({
   showPreview,
   sidebarOpen,
   currentSessionId,
+  streamMode,
   onToggleSidebar,
   onTogglePreview,
   onResetWorkspace,
+  onToggleStreamMode,
 }: ChatHeaderProps) {
   return (
     <header className="h-14 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between shrink-0">
@@ -76,6 +80,26 @@ export default function ChatHeader({
             </span>
           </div>
         )}
+
+        {/* v2: 流式 / 非流式 切换按钮 (SenseNova SSE stall 修复)
+            双职责:
+            1. 当前会话模式: 切了之后下一轮 step() 用新模式
+            2. 新会话默认模式: 点击"新建会话"后启动时用当前 toggle 状态
+               (resetForCreate 不重置 streamMode, 让用户能预设) */}
+        <button
+          onClick={onToggleStreamMode}
+          title={streamMode
+            ? "当前: 流式 (实时显示思考过程). 点击切换为非流式 — 适合商汤等 SSE 不稳定的 provider. 也是下一次新建会话的默认模式"
+            : "当前: 非流式 (等待完整响应). 点击切换为流式. 也是下一次新建会话的默认模式"}
+          className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono font-semibold border rounded transition-colors cursor-pointer ${
+            streamMode
+              ? "border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+              : "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+          }`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${streamMode ? "bg-indigo-500" : "bg-amber-500"}`} />
+          {streamMode ? "流式" : "非流式"}
+        </button>
 
         {hasDraftFiles && (
           <button

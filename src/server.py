@@ -225,6 +225,31 @@ async def download_file(path: str):
     )
 
 
+async def _handle_side_effect(websocket, agent, client_msg: dict) -> dict:
+    """侧效消息过滤: 处理不改变 agent 状态机的 WS 消息。
+
+    用途: 用户在 wait_approval / paused 状态时发的"切换流式/非流式"等
+    纯侧效消息不应进入 on_user_feedback(后者会清 _pending_approval
+    / _pending_feedback 破坏 wait 状态)。
+
+    当前处理的侧效消息:
+        - "set_stream_mode": 切换流式/非流式, 调用 agent.set_stream_mode()
+                              并回 "stream_mode_changed" 事件, 然后等下一条
+                              真正的审批/continue 消息
+
+    返回: 过滤后剩下的 client_msg(供 on_user_feedback 处理)
+    """
+    if client_msg.get("type") == "set_stream_mode":
+        agent.set_stream_mode(client_msg.get("stream_mode", True))
+        await websocket.send_json({
+            "type": "stream_mode_changed",
+            "stream_mode": agent._stream_mode,
+        })
+        # 继续等真正的审批/continue/feedback 消息
+        return await websocket.receive_json()
+    return client_msg
+
+
 @app.websocket("/api/ws/agent")
 async def ws_agent(websocket: WebSocket):
     """WebSocket 接入层：转发事件给 Agent，接收用户反馈
@@ -320,12 +345,15 @@ async def ws_agent(websocket: WebSocket):
                     async for event in agent.step():
                         await websocket.send_json(event)
                         if event["type"] == "wait_approval":
+                            # v2: 侧效消息(流式/非流式切换) 在 server 层先吃掉, 不污染 agent 状态机
                             client_res = await websocket.receive_json()
+                            client_res = await _handle_side_effect(websocket, agent, client_res)
                             agent.on_user_feedback(client_res)
                             # 继续 step() 走下一步 (会再次进到 while 开头)
                         elif event["type"] == "paused":
                             # 等用户主动发消息 (continue / approve / feedback)
                             client_msg = await websocket.receive_json()
+                            client_msg = await _handle_side_effect(websocket, agent, client_msg)
                             agent.on_user_feedback(client_msg)
                             break  # 退出内层 async for, 回到外层 while 重新进入 step()
                         elif event["type"] == "done":
@@ -339,7 +367,9 @@ async def ws_agent(websocket: WebSocket):
                 async for event in agent.step():
                     await websocket.send_json(event)
                     if event["type"] == "wait_approval":
+                        # v2: 侧效消息(流式/非流式切换) 在 server 层先吃掉, 不污染 agent 状态机
                         client_res = await websocket.receive_json()
+                        client_res = await _handle_side_effect(websocket, agent, client_res)
                         agent.on_user_feedback(client_res)
         except WebSocketDisconnect:
             heartbeat_task.cancel()
@@ -445,14 +475,19 @@ def _to_ui_messages(entries: list[dict]) -> list[dict]:
 
 
 async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: str, msg_mgr: MessageManager):
-    """v2: 处理 {type: "start", prompt, docx_path}.
+    """v2: 处理 {type: "start", prompt, docx_path, stream_mode?}.
 
     Returns: (agent, error_msg)
       - 成功: (Agent, None)
       - 失败: (None, "错误消息")
+
+    v2 扩展: 新增可选 stream_mode 字段(默认 True) — 让前端能指定新会话的初始模式,
+    商汤用户可在新建会话前把 toggle 拨到"非流式",新会话直接以非流式启动,
+    避免触发 SSE stall 后再切的体验问题。
     """
     user_prompt = (init_data.get("prompt") or "").strip()
     docx_path = init_data.get("docx_path") or ""
+    stream_mode = bool(init_data.get("stream_mode", True))  # 默认流式
 
     if not user_prompt:
         return None, "参数 prompt 不能为空"
@@ -494,6 +529,7 @@ async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: 
         log_path=log_path,
         session_id=session_id,  # v2
         session_dir=session_dir,  # v2
+        stream_mode=stream_mode,  # v2 扩展: 新会话初始流式/非流式模式
     )
 
     # v2 fix: Agent 创建后**立即**同步写盘, 让 /api/sessions 立即能看到这个 session
@@ -504,11 +540,15 @@ async def _start_new_session(init_data: dict, adapter: LLMClientAdapter, model: 
 
 
 async def _resume_existing_session(init_data: dict, adapter: LLMClientAdapter):
-    """v2: 处理 {type: "resume", session_id}.
+    """v2: 处理 {type: "resume", session_id, stream_mode?}.
 
     Returns: (agent, error_msg)
       - 成功: (Agent, None) - 从 out/sessions/<id>/ 反序列化
       - 失败: (None, "错误消息")
+
+    v2 扩展: 接受可选 stream_mode(默认 True)— 让用户能控制恢复后的会话从哪种模式起跑。
+    注意: stream_mode 当前不持久化到 metadata, 所以 load_from_disk 总是从默认 True 开始,
+    恢复后用 init_data.stream_mode 覆盖(如果有)。这样用户即使把旧 session 恢复到非流式也可以。
     """
     session_id = (init_data.get("session_id") or "").strip()
     if not session_id:
@@ -533,6 +573,9 @@ async def _resume_existing_session(init_data: dict, adapter: LLMClientAdapter):
         docx_path=metadata.get("docx_path", ""),
         log_path=log_path,
     )
+    # v2 扩展: 恢复后用前端传入的 stream_mode 覆盖(load_from_disk 默认 True)
+    if "stream_mode" in init_data:
+        agent.set_stream_mode(bool(init_data["stream_mode"]))
     return agent, None
 
 

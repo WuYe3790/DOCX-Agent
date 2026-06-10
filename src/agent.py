@@ -183,7 +183,8 @@ class Agent:
 
     def __init__(self, system_prompt: str, llm_adapter: LLMClientAdapter,
                  msg_mgr: MessageManager, docx_path: str = "", log_path: Optional[Path] = None,
-                 session_id: str = "", session_dir: Optional[Path] = None):
+                 session_id: str = "", session_dir: Optional[Path] = None,
+                 stream_mode: bool = True):
         self.system_prompt = system_prompt
         self.msg_mgr = msg_mgr
         self.llm = llm_adapter
@@ -200,6 +201,14 @@ class Agent:
         # 表现为 reasoning-only 死循环 (复现: session-20260609-205746 第 13/14 轮)
         # 策略: 检测到 finish_reason=None + 无 tool_calls → 不污染 conversation, 重发请求
         self._stream_incomplete_retries = 0
+        # === 流式 / 非流式 开关 ===
+        # 用途:商汤 SenseNova 等 SSE 协议层有 bug 的 provider 在流式 reasoning→content 切换时
+        # 偶发流静默关闭(2026-06-10 session-20260610-100416 04 章节 stall),前端点 toggle
+        # 切到非流式,下一轮 step() 走 create_chat_completion_blocking()。
+        # 默认 True(流式)保持现有 live reasoning UX;切换在下一轮请求生效,不打断当前请求。
+        # stream_mode 由 server.py 在构造 Agent 时传入(读自 WS start 帧) — 让用户能
+        # 在新会话启动前先把 toggle 拨到非流式,新会话直接以非流式开始(避免触发 stall 后再切)。
+        self._stream_mode: bool = stream_mode
         # === v2: 持久化相关 ===
         self.session_id = session_id
         self.session_dir = session_dir  # Path("out") / "sessions" / session_id
@@ -350,6 +359,22 @@ class Agent:
             self._pending_feedback = client_msg
             self._pending_approval = False
 
+    def set_stream_mode(self, stream_mode: bool) -> None:
+        """切换流式 / 非流式 — 前端 toggle 调用, 下一轮 step() 生效。
+
+        行为:
+        - stream_mode=True:  下一轮走 create_chat_completion(stream=True) — 默认
+        - stream_mode=False: 下一轮走 create_chat_completion_blocking() — 用于 SenseNova
+                              等 SSE 协议层有 bug 的 provider
+
+        注意:
+        - 切换不打断当前正在进行的请求, 下一轮请求才用新模式 (原话 "下一条消息开始用新模式")
+        - 不持久化: 重启 / 刷新页面后回到默认 (按用户原话不落盘)
+        - server.py 在收到 WS "set_stream_mode" 消息时调用本方法
+        """
+        self._stream_mode = bool(stream_mode)
+        self._append_log("stream_mode_changed", {"stream_mode": self._stream_mode})
+
     async def step(self):
         """
         异步生成器：每 yield 一个事件，WS 立即发给前端。
@@ -408,32 +433,43 @@ class Agent:
                 "tool_names": sorted(list(current_tool_names)),
             })
 
-            # --- 0. Pre-stream retry wrapper ---
-            stream = None
+            # --- 0. Pre-stream retry wrapper (流式 / 非流式共用 retry 循环) ---
+            # 商汤 SenseNova 等 provider 在流式 reasoning→content 切换时偶发流静默关闭,
+            # 前端点 toggle 切到非流式后, 下一轮走 create_chat_completion_blocking() 走 JSON 路径绕过 SSE bug。
+            response_or_stream = None
             for attempt in range(_MAX_RETRIES + 1):
                 try:
-                    stream = self.llm.create_chat_completion(
-                        messages=request_messages,
-                        tools=current_tool_schemas,
-                        stream=True,
-                    )
+                    if self._stream_mode:
+                        response_or_stream = self.llm.create_chat_completion(
+                            messages=request_messages,
+                            tools=current_tool_schemas,
+                            stream=True,
+                        )
+                    else:
+                        response_or_stream = self.llm.create_chat_completion_blocking(
+                            messages=request_messages,
+                            tools=current_tool_schemas,
+                        )
                     break
                 except _RETRYABLE_EXC as e:
                     if attempt < _MAX_RETRIES:
                         delay = _RETRY_DELAYS[attempt]
-                        self._append_log("流式重试", {"attempt": attempt + 1, "error": str(e), "delay": delay})
+                        mode = "stream" if self._stream_mode else "blocking"
+                        self._append_log("流式重试", {"attempt": attempt + 1, "error": str(e), "delay": delay, "mode": mode})
                         yield {"type": "retrying", "attempt": attempt + 1, "delay": delay, "error": str(e)}
                         await asyncio.sleep(delay)
                         continue
-                    self._append_log("流式重试耗尽", {"error": str(e), "total_attempts": attempt + 1})
+                    mode = "stream" if self._stream_mode else "blocking"
+                    self._append_log("流式重试耗尽", {"error": str(e), "total_attempts": attempt + 1, "mode": mode})
                     yield {"type": "error", "message": f"调用大模型失败（重试 {attempt + 1} 次后）: {e}"}
                     return
                 except Exception as e:
-                    self._append_log("模型调用失败", {"error": str(e)})
+                    mode = "stream" if self._stream_mode else "blocking"
+                    self._append_log("模型调用失败", {"error": str(e), "mode": mode})
                     yield {"type": "error", "message": f"调用大模型失败: {str(e)}"}
                     return
 
-            # --- 1. Iterate streaming chunks, accumulate + yield deltas ---
+            # --- 1. 拆解响应 — 流式迭代 chunks, 非流式拆 ChatCompletion 对象 ---
             tool_calls_map: dict = {}
             accumulated_content = ""
             accumulated_reasoning = ""
@@ -442,60 +478,105 @@ class Agent:
             usage = None
             stream_error: Exception | None = None
 
-            try:
-                for chunk in stream:
-                    chunk_usage = getattr(chunk, "usage", None)
-                    if chunk_usage:
-                        usage = chunk_usage
-                    if not chunk.choices:
-                        continue
-                    choice = chunk.choices[0]
-                    fr = getattr(choice, "finish_reason", None)
-                    if fr:
-                        finish_reason = fr
-                    delta = getattr(choice, "delta", None)
-                    if delta is None:
-                        continue
+            if self._stream_mode:
+                # === 现有流式路径(逻辑与原版完全一致, 仅数据来源从 `stream` 改成 `response_or_stream`)===
+                try:
+                    for chunk in response_or_stream:
+                        chunk_usage = getattr(chunk, "usage", None)
+                        if chunk_usage:
+                            usage = chunk_usage
+                        if not chunk.choices:
+                            continue
+                        choice = chunk.choices[0]
+                        fr = getattr(choice, "finish_reason", None)
+                        if fr:
+                            finish_reason = fr
+                        delta = getattr(choice, "delta", None)
+                        if delta is None:
+                            continue
 
-                    # Reasoning(provider 无关) — 字段路径由 self.llm.reasoning_field 决定:
-                    # - DeepSeek/Agnes: delta.reasoning_content (OpenAI 标准字段)
-                    # - SenseNova:     delta.model_extra.reasoning (商汤专有扩展)
-                    # 路径来自 config 或 llm_adapter._DEFAULT_REASONING_FIELDS 默认表。
-                    rc = extract_reasoning(delta, self.llm.reasoning_field)
-                    if rc:
-                        accumulated_reasoning += rc
-                        reasoning_yielded = True
-                        self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning)})
-                        yield {"type": "reasoning", "delta": rc}
+                        # Reasoning(provider 无关) — 字段路径由 self.llm.reasoning_field 决定:
+                        # - DeepSeek/Agnes: delta.reasoning_content (OpenAI 标准字段)
+                        # - SenseNova:     delta.model_extra.reasoning (商汤专有扩展)
+                        # 路径来自 config 或 llm_adapter._DEFAULT_REASONING_FIELDS 默认表。
+                        rc = extract_reasoning(delta, self.llm.reasoning_field)
+                        if rc:
+                            accumulated_reasoning += rc
+                            reasoning_yielded = True
+                            self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning)})
+                            yield {"type": "reasoning", "delta": rc}
 
-                    # Content
-                    c = getattr(delta, "content", None)
-                    if c:
-                        accumulated_content += c
-                        self._append_log("chunk_event", {"round": self._round_index, "type": "content", "len": len(c), "cum": len(accumulated_content)})
-                        yield {"type": "content", "delta": c}
+                        # Content
+                        c = getattr(delta, "content", None)
+                        if c:
+                            accumulated_content += c
+                            self._append_log("chunk_event", {"round": self._round_index, "type": "content", "len": len(c), "cum": len(accumulated_content)})
+                            yield {"type": "content", "delta": c}
 
-                    # Tool calls（跨 chunk 累积 arguments）
-                    tcs = getattr(delta, "tool_calls", None)
-                    if tcs:
-                        for tc in tcs:
-                            idx = tc.index
-                            if idx not in tool_calls_map:
-                                tool_calls_map[idx] = {
-                                    "id": tc.id or "",
-                                    "name": (tc.function.name if tc.function else "") or "",
-                                    "arguments": (tc.function.arguments if tc.function else "") or "",
-                                }
-                            else:
-                                if tc.function:
-                                    if tc.function.name:
-                                        tool_calls_map[idx]["name"] += tc.function.name
-                                    if tc.function.arguments:
-                                        tool_calls_map[idx]["arguments"] += tc.function.arguments
-                                if tc.id:
-                                    tool_calls_map[idx]["id"] = tc.id
-            except Exception as e:
-                stream_error = e
+                        # Tool calls（跨 chunk 累积 arguments）
+                        tcs = getattr(delta, "tool_calls", None)
+                        if tcs:
+                            for tc in tcs:
+                                idx = tc.index
+                                if idx not in tool_calls_map:
+                                    tool_calls_map[idx] = {
+                                        "id": tc.id or "",
+                                        "name": (tc.function.name if tc.function else "") or "",
+                                        "arguments": (tc.function.arguments if tc.function else "") or "",
+                                    }
+                                else:
+                                    if tc.function:
+                                        if tc.function.name:
+                                            tool_calls_map[idx]["name"] += tc.function.name
+                                        if tc.function.arguments:
+                                            tool_calls_map[idx]["arguments"] += tc.function.arguments
+                                    if tc.id:
+                                        tool_calls_map[idx]["id"] = tc.id
+                except Exception as e:
+                    stream_error = e
+            else:
+                # === 非流式路径: 把 ChatCompletion 拆成与流式归一化的事件 ===
+                # 设计目标: 下游(quirk 判断 / append_assistant / tool 执行)对模式无感
+                # 数据全部填到同样的 accumulated_content / accumulated_reasoning / tool_calls_map / finish_reason
+                try:
+                    response = response_or_stream
+                    usage = getattr(response, "usage", None)
+                    if response.choices:
+                        choice = response.choices[0]
+                        fr = getattr(choice, "finish_reason", None)
+                        if fr:
+                            finish_reason = fr
+                        msg = getattr(choice, "message", None)
+                        if msg is not None:
+                            # Reasoning — SenseNova 非流式路径: message.model_extra.reasoning
+                            # (与流式 delta.model_extra.reasoning 字段路径同源, 只是挂在 message 上)
+                            extra = getattr(msg, "model_extra", None)
+                            if isinstance(extra, dict):
+                                rc = extra.get("reasoning")
+                                if rc:
+                                    accumulated_reasoning += rc
+                                    reasoning_yielded = True
+                                    self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning), "mode": "blocking"})
+                                    yield {"type": "reasoning", "delta": rc}
+                            # Content — OpenAI SDK 在非流式下返回完整字符串, 一次 yield
+                            c = getattr(msg, "content", None)
+                            if c:
+                                accumulated_content += c
+                                self._append_log("chunk_event", {"round": self._round_index, "type": "content", "len": len(c), "cum": len(accumulated_content), "mode": "blocking"})
+                                yield {"type": "content", "delta": c}
+                            # Tool calls — 非流式下一次性填入, 不需要跨对象累积 arguments
+                            tcs = getattr(msg, "tool_calls", None)
+                            if tcs:
+                                for tc in tcs:
+                                    idx = getattr(tc, "index", 0) or 0
+                                    if idx not in tool_calls_map:
+                                        tool_calls_map[idx] = {
+                                            "id": tc.id or "",
+                                            "name": (tc.function.name if tc.function else "") or "",
+                                            "arguments": (tc.function.arguments if tc.function else "") or "",
+                                        }
+                except Exception as e:
+                    stream_error = e
 
             # Reasoning 阶段结束 → 通知前端固化（消除思考-工具视觉脱节）
             if reasoning_yielded:

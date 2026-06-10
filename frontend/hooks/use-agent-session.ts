@@ -38,6 +38,13 @@ export function useAgentSession(opts: {
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [tokenCount, setTokenCount] = useState<number>(0);
 
+  // === 流式 / 非流式 开关 (v2 修复 SenseNova SSE stall) ===
+  // 用途: 商汤等 SSE 协议层有 bug 的 provider, 用户在 stalled 时切到非流式
+  // 让下一轮 step() 走 create_chat_completion_blocking()
+  // 状态: 由后端 stream_mode_changed 帧校正 (单 source of truth = 后端)
+  // 默认 True (流式) — 保持现有 live reasoning UX
+  const [streamMode, setStreamMode] = useState<boolean>(true);
+
   // === 实时流状态 (RAF 节流) ===
   const [liveReasoning, setLiveReasoning] = useState<string>("");
   const [liveContent, setLiveContent] = useState<string>("");
@@ -94,6 +101,8 @@ export function useAgentSession(opts: {
   //   含: messages, liveStream, docxPath, isWaitingApproval, approvalPhase,
   //       isGenerating, isConnected, tokenCount, currentSessionId, currentSessionInfo, 关 WS
   //   不含: page UI state (feedbackValue, expandedTools, selectedToolId, showPreview, sessions, ...)
+  //   v2: 不重置 streamMode — 让用户在新 session 启动前先把 toggle 拨到"非流式",
+  //   新 session 直接以非流式启动,避免触发 SSE stall 后再切的体验问题
   const resetForCreate = useCallback(() => {
     setMessages([]);
     clearLiveStream();
@@ -115,6 +124,7 @@ export function useAgentSession(opts: {
   // === resetForWorkspace — resetWorkspace 用的部分重置 ===
   //   原 resetWorkspace 不重置 isConnected / tokenCount / currentSessionId / currentSessionInfo
   //   (因为它是"清空 UI", 不是"销毁 session")
+  //   v2: 同 resetForCreate, 不重置 streamMode (切会话时也保留 toggle 状态)
   const resetForWorkspace = useCallback(() => {
     setMessages([]);
     clearLiveStream();
@@ -175,6 +185,23 @@ export function useAgentSession(opts: {
     return true;
   }, []);
 
+  // === sendSetStreamMode — 切换流式 / 非流式 ===
+  // 行为:
+  //   - 乐观更新本地 state (点击立刻有反馈, 不等 round-trip)
+  //   - 发 WS set_stream_mode 消息, 后端处理后会回 stream_mode_changed 帧
+  //   - 后端回帧时再 setStreamMode(校正), 保证最终状态以服务端为准
+  // 失败 (WS 断开) 时本地状态与后端不一致, 用户再次点击会重试对齐
+  const sendSetStreamMode = useCallback((mode: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    setStreamMode(mode);  // 乐观更新
+    wsRef.current.send(
+      JSON.stringify({ type: "set_stream_mode", stream_mode: mode })
+    );
+    return true;
+  }, []);
+
   // === start — 启动/恢复 WS session (原 startAgentSession, 函数体 1:1 搬入) ===
   const start = useCallback((initialPrompt: string, path: string, resumeSessionId?: string) => {
     if (wsRef.current) {
@@ -198,12 +225,21 @@ export function useAgentSession(opts: {
       setIsConnected(true);
       if (resumeSessionId) {
         // v2: resume 已有 session (后端 Agent.load_from_disk)
-        socket.send(JSON.stringify({ type: "resume", session_id: resumeSessionId }));
+        socket.send(JSON.stringify({
+          type: "resume",
+          session_id: resumeSessionId,
+          stream_mode: streamMode,  // v2 扩展: 恢复时也带当前 toggle 状态
+        }));
         // 注意: 不立即 push user message, 等 history frame 回来再覆盖
       } else {
         // v2: start 新 session (后端生成 session_id)
         setIsGenerating(true);
-        socket.send(JSON.stringify({ type: "start", prompt: initialPrompt, docx_path: path }));
+        socket.send(JSON.stringify({
+          type: "start",
+          prompt: initialPrompt,
+          docx_path: path,
+          stream_mode: streamMode,  // v2 扩展: 新会话初始流式/非流式模式
+        }));
         if (initialPrompt) {
           setMessages((prev) => [...prev, { role: "user", content: initialPrompt }]);
         }
@@ -287,6 +323,12 @@ export function useAgentSession(opts: {
 
         case "heartbeat":
           break;
+
+        case "stream_mode_changed": {
+          // v2: 后端回执, 校正本地 streamMode (单 source of truth = 后端)
+          setStreamMode(Boolean(data.stream_mode));
+          break;
+        }
 
         case "reasoning": {
           // RAF 节流
@@ -507,7 +549,7 @@ export function useAgentSession(opts: {
       setApprovalPhase(null);
       setIsGenerating(false);
     };
-  }, [onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview, setCurrentSessionId, clearLiveStream]);
+  }, [onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview, setCurrentSessionId, clearLiveStream, streamMode]);
 
   // === unmount 时关 WS (原 page.tsx 没有 cleanup, 但我们补上避免泄漏) ===
   useEffect(() => {
@@ -533,6 +575,7 @@ export function useAgentSession(opts: {
     thinkTime,
     currentSessionId,
     currentSessionInfo,
+    streamMode,
     // setters (供 page handlers 调用)
     setCurrentSessionId,
     // actions
@@ -540,6 +583,7 @@ export function useAgentSession(opts: {
     stop,
     sendContinue,
     sendApprove,
+    sendSetStreamMode,
     clearLiveStream,
     resetForCreate,
     resetForWorkspace,
