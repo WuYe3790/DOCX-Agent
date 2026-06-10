@@ -167,7 +167,7 @@ def test_save_lock_prevents_concurrent_writes():
 
     # 启动并发 _background_save (避坑 2 核心: 锁必须工作)
     async def hammer():
-        await asyncio.gather(*[agent._background_save() for _ in range(20)])
+        await asyncio.gather(*[agent._persistence._background_save() for _ in range(20)])
     asyncio.run(hammer())
 
     # 关键验证: messages.json 仍是合法 JSON (没被写花)
@@ -232,8 +232,8 @@ def test_no_session_dir_skip_safely():
     agent.save_to_disk()  # 静默 noop
     # 无 session_dir 时 _checkpoint() 不抛异常
     agent._checkpoint()  # 静默 noop
-    # 无 session_id 时 _metadata_dict 仍能生成 (字段空字符串)
-    meta = agent._metadata_dict()
+    # 无 session_id 时 metadata_dict 仍能生成 (字段空字符串)
+    meta = agent._persistence.metadata_dict()
     assert meta["session_id"] == ""
 
     print("[OK] Test 5: no session_dir/id safely degrades to noop")

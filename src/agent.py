@@ -38,6 +38,7 @@ from llm_adapter.quirks import apply_quirk, QuirkAction
 from docx_tools import call_tool
 from context_manager import MessageManager
 from state_machine import WorkflowTransitions, TransitionDirective
+from session_persistence import SessionPersistence
 
 
 # 流式调用可重试的异常（pre-stream 阶段）
@@ -132,74 +133,19 @@ class Agent:
         # === v2: 持久化相关 ===
         self.session_id = session_id
         self.session_dir = session_dir  # Path("out") / "sessions" / session_id
-        self._save_lock = asyncio.Lock()  # 写盘异步锁 (避坑 2: tool_start/tool_end 间隔 < 几毫秒 时的文件写花)
+        # Step B: 持久化层已抽出到 src/session_persistence.py
+        # 用 weakref 避免双向循环引用 (用户补丁 1), lock 移入 persistence 内部
+        self._persistence = SessionPersistence(self)
 
-    # ─── v2 持久化: save/load + 锁 + Checkpoint ────
+    # ─── v2 持久化: 委托给 SessionPersistence ────
 
     def _checkpoint(self) -> None:
-        """5 个 Checkpoint 触发点统一调用: fire-and-forget 后台 save"""
-        if self.session_dir:  # 无 session_dir 时 (测试场景) 跳过
-            asyncio.create_task(self._background_save())
-
-    async def _background_save(self) -> None:
-        """异步串行化写盘: 同一 session 同一时刻只有一个写盘线程"""
-        if not self.session_dir:
-            return
-        async with self._save_lock:  # 锁
-            await asyncio.to_thread(self.save_to_disk)
+        """5 个 Checkpoint 触发点统一调用: 委托给 SessionPersistence"""
+        self._persistence.checkpoint()
 
     def save_to_disk(self) -> None:
-        """同步写盘 (实际 I/O 在 thread) - 序列化 3 个 JSON 到 self.session_dir"""
-        if not self.session_dir:
-            return
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        (self.session_dir / "metadata.json").write_text(
-            json.dumps(self._metadata_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        (self.session_dir / "messages.json").write_text(
-            json.dumps(self._messages_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        (self.session_dir / "workflow.json").write_text(
-            json.dumps(self._workflow_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        # 注意: 草稿文件 (.md) / style_profiles/ / uploads/ **不需要** "snapshot" 复制 —
-        # 它们从诞生起就在 session_dir/drafts/ / style_profiles/ / uploads/ 下
-        # (工具 dispatcher 隐式注入 session_id 派生 session_dir 写入, 避坑 1)
-
-    def _metadata_dict(self) -> dict:
-        from datetime import datetime
-        return {
-            "session_id": self.session_id,
-            "title": (Path(self.docx_path).stem if self.docx_path else "新会话"),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "docx_path": self.docx_path,
-            "provider": self.llm.get_provider() if hasattr(self.llm, "get_provider") else "",
-            "model": self.llm.get_model_name() if hasattr(self.llm, "get_model_name") else "",
-            "workflow_state": self.workflow_state,
-            "session_complete": False,
-            "pending_approval": self._pending_approval,  # v2: resume 时供 server.py 推 isWaitingApproval
-        }
-
-    def _messages_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "system_prompt": self.msg_mgr._system_prompt,
-            "entries": list(self.msg_mgr._entries),
-            "total_input_tokens": self.msg_mgr._total_input_tokens,
-            "last_prompt_tokens": self.msg_mgr._last_prompt_tokens,
-        }
-
-    def _workflow_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "workflow_state": self.workflow_state,
-            "stage_called_tools": {k: sorted(v) for k, v in self.stage_called_tools.items()},
-            "draft_files_written": list(self.draft_files_written),
-            "round_index": self._round_index,
-        }
+        """同步写盘 — 委托给 SessionPersistence (向后兼容, 测试 / 旧调用方用)"""
+        self._persistence.save_sync()
 
     @classmethod
     def load_from_disk(
@@ -207,9 +153,8 @@ class Agent:
         system_prompt: str, docx_path: str = "", log_path: Optional[Path] = None
     ) -> "Agent":
         """从 session_dir 反序列化 Agent 状态 (Step 2 server.py resume 时调用)"""
-        metadata = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
-        messages_data = json.loads((session_dir / "messages.json").read_text(encoding="utf-8"))
-        workflow = json.loads((session_dir / "workflow.json").read_text(encoding="utf-8"))
+        # Step B: 读 3 个 JSON 委托给 SessionPersistence
+        metadata, messages_data, workflow = SessionPersistence.read_session_files(session_dir)
 
         msg_mgr = MessageManager(system_prompt)
         msg_mgr._entries = list(messages_data["entries"])
