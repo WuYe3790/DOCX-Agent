@@ -26,10 +26,39 @@ def build_client(config: dict, override_provider: Optional[str] = None) -> "LLMC
 
 
 def pick_capable_adapter(current: "LLMClient", capability: str) -> Optional["LLMClient"]:
-    """若 current 不具备 capability,从 config 里挑第一个有该 capability 的 provider,
-    返回为它构建的新 LLMClient;都没有则返回 None。
+    """若 current 已具备 capability → 直接返回 current(零开销);否则从 config.providers
+    里找第一个有该 capability 的 provider,用 LLMClient(config_path, provider_override=name)
+    构造新 client 返回;都没有则返回 None。
 
-    Review #2 落地的"工厂"接口 — 把 fallback 选择权从 tool 层收回 adapter 层。
-    Step 2 落地完整实现(走 PROFILES + has_capability)。
+    Review #2 落地的"工厂"接口 — 把 fallback 选择权从 tool 层收回 adapter 层:
+    - tool 层(basic_tools/*) 只调这个函数,不再直接读 raw_config
+    - 不再 mutate os.environ["LLM_PROVIDER"](旧 analyze_image_content.py:51-59 的反模式)
+    - 候选 provider 缺 api_key 等导致构造失败时,静默跳过试下一个
+
+    Step 2 实现:基于 LLMClient 自带的 capability 解析(provider block 显式 > _DEFAULT_CAPABILITIES)
+    去测试每个候选 provider。Step 5 升级为完整 PROFILES + auto-migration 后,
+    此函数语义不变。
     """
-    raise NotImplementedError("pick_capable_adapter 在 Step 2 落地")
+    # 延迟 import — 避免 registry.py 顶层 import provider.py 触发循环依赖
+    from .provider import LLMClient
+
+    # 1. 自己已经具备 → 直接返回
+    if current.has_capability(capability):
+        return current
+
+    # 2. 遍历 config 里其他 provider,找第一个有该 capability 的
+    cfg = current.raw_config
+    config_path = current.config_path
+    current_name = current.get_provider()
+    for name, _block in (cfg.get("providers") or {}).items():
+        if name == current_name:
+            continue   # 已在第 1 步排除
+        try:
+            candidate = LLMClient(config_path, provider_override=name)
+        except RuntimeError:
+            # 候选 provider 缺 api_key / 配置不完整 → 静默跳过,试下一个
+            continue
+        if candidate.has_capability(capability):
+            return candidate
+
+    return None

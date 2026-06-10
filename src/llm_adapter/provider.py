@@ -16,14 +16,26 @@ from pathlib import Path
 from openai import OpenAI
 
 
+# Step 2: provider 名 → 默认 capability 集合(Step 5 升级为完整 PROFILES + auto-migration)
+# 注意:这只是 v1 config 的兼容兜底,config.json 的 providers.<name>.capabilities
+# 字段会覆盖此表 — 新接入的 provider 在 config 里写 capabilities 即可,不需要改这里。
+_DEFAULT_CAPABILITIES: dict[str, frozenset] = {
+    "deepseek":  frozenset({"chat", "tools", "reasoning"}),
+    "sensenova": frozenset({"chat", "tools", "vision", "reasoning"}),
+    "agnes":     frozenset({"chat", "tools", "reasoning"}),
+}
+_FALLBACK_CAPABILITIES = frozenset({"chat", "tools"})   # 未知 provider 的最低限度
+
+
 class LLMClient:
     """模型适配层:统一管理不同大模型服务商(如 DeepSeek, SenseNova, Agnes)的连接与调用细节。"""
 
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, *, provider_override: str | None = None):
         if config_path is None:
             config_path = Path(__file__).parent.parent / "config.json"
         else:
             config_path = Path(config_path)
+        self._config_path = config_path           # Step 2: 供 pick_capable_adapter 重新构造用
 
         # 1. 加载 config.json
         self.config = {}
@@ -35,9 +47,13 @@ class LLMClient:
                 print(f"警告: 加载配置文件 {config_path} 失败: {e}")
 
         # 2. 判定 provider
-        # 优先级: 环境变量 LLM_PROVIDER -> config.json 的 provider 字段
+        # 优先级: provider_override(显式参数) -> 环境变量 LLM_PROVIDER -> config.json 的 provider 字段
         #        -> 根据旧版 root-level 配置自动判定 -> 默认 deepseek
-        self.provider = os.getenv("LLM_PROVIDER") or self.config.get("provider")
+        self.provider = (
+            provider_override
+            or os.getenv("LLM_PROVIDER")
+            or self.config.get("provider")
+        )
 
         top_api_key = self.config.get("api_key")
         top_base_url = self.config.get("base_url")
@@ -157,6 +173,15 @@ class LLMClient:
             max_retries=0,
         )
 
+        # 5. Step 2: 解析 capabilities
+        # 优先级:provider block 显式声明 > _DEFAULT_CAPABILITIES 默认表 > _FALLBACK_CAPABILITIES
+        # 新接入 provider 在 config.json 写 "capabilities": [...] 即可,不必改代码。
+        provider_block = (self.config.get("providers") or {}).get(self.provider) or {}
+        if "capabilities" in provider_block:
+            self._capabilities = frozenset(provider_block["capabilities"])
+        else:
+            self._capabilities = _DEFAULT_CAPABILITIES.get(self.provider, _FALLBACK_CAPABILITIES)
+
     # ────────────────────────── 公开 getter(旧接口,保留) ──────────────────────────
 
     def get_model_name(self) -> str:
@@ -180,15 +205,14 @@ class LLMClient:
     def has_capability(self, capability: str) -> bool:
         """是否具备某能力(chat/tools/vision/reasoning)。
 
-        Step 1 占位实现:基于 provider 名硬编码,与旧 analyze_image_content.py:48
-        白名单兼容。Step 2 会改成读 cfg.capabilities。
+        Step 2 实现:读 self._capabilities,它在 __init__ 阶段一次性解析:
+          1. config.json providers.<name>.capabilities 显式声明优先
+          2. 否则用 _DEFAULT_CAPABILITIES 表(deepseek/sensenova/agnes 三家)
+          3. 都没有则用 _FALLBACK_CAPABILITIES = {"chat","tools"}
+
+        Step 5 把默认表升级为完整 PROFILES + auto-migration,语义不变。
         """
-        # 与旧白名单 {"sensenova", "openai", "gemini"} 行为一致
-        vision_allowlist = {"sensenova", "openai", "gemini"}
-        if capability == "vision":
-            return self.provider in vision_allowlist
-        # 其他能力默认 True(chat/tools/reasoning 所有 provider 都支持)
-        return True
+        return capability in self._capabilities
 
     @property
     def reasoning_field(self) -> str:
@@ -213,6 +237,12 @@ class LLMClient:
         """返回原始 config.json 字典。给 registry.pick_capable_adapter 用,
         不应该被工具层(basic_tools/*)直接读取。"""
         return self.config
+
+    @property
+    def config_path(self) -> Path:
+        """返回 config.json 的路径(Path 对象)。给 registry.pick_capable_adapter
+        重新构造同 config 下不同 provider 的 LLMClient 用。"""
+        return self._config_path
 
     # ────────────────────────── 请求构建(旧 if-else,Step 5 替换) ──────────────────────────
 

@@ -265,14 +265,15 @@ def test_backward_compat_class_methods():
 # ─── 占位 registry 函数应该抛 NotImplementedError(防止 Step 1 误用)───
 
 def test_registry_placeholders_raise():
-    from llm_adapter.registry import build_client, pick_capable_adapter
-    for fn, args in [(build_client, ({},)), (pick_capable_adapter, (None, "vision"))]:
-        try:
-            fn(*args)
-            raise AssertionError(f"{fn.__name__} 在 Step 1 应抛 NotImplementedError")
-        except NotImplementedError:
-            pass
-    print("[OK] registry 占位函数抛 NotImplementedError")
+    """Step 1 当时:build_client + pick_capable_adapter 都是占位。
+    Step 2 落地 pick_capable_adapter 后,只剩 build_client 仍是 Step 5 的占位。"""
+    from llm_adapter.registry import build_client
+    try:
+        build_client({})
+        raise AssertionError("build_client 在 Step 5 之前应抛 NotImplementedError")
+    except NotImplementedError:
+        pass
+    print("[OK] registry 占位:build_client 仍待 Step 5 落地")
 
 
 if __name__ == "__main__":
