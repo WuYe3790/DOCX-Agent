@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import json
+import warnings
 from pathlib import Path
 from openai import OpenAI
 
@@ -103,6 +104,16 @@ class LLMClient:
         top_base_url = self.config.get("base_url")
 
         if not self.provider:
+            # Step 6: base_url 子串启发式已 deprecated — 显式声明 "provider" 字段
+            if top_base_url and ("sensenova" in top_base_url
+                                  or "agnes" in top_base_url
+                                  or "deepseek" in top_base_url):
+                warnings.warn(
+                    "通过 base_url 子串(sensenova/agnes/deepseek)推断 provider 已 deprecated。"
+                    "请在 config.json 顶层显式声明 \"provider\" 字段(参考 src/config.example.json)。",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             if top_base_url and "sensenova" in top_base_url:
                 self.provider = "sensenova"
             elif top_base_url and "agnes" in top_base_url:
@@ -139,7 +150,16 @@ class LLMClient:
             if not provider_config:
                 self.api_key = self.api_key or top_api_key
                 self.base_url = self.base_url or top_base_url
-
+                # Step 6: flat config(顶层 api_key/base_url 无 providers 嵌套块)已 deprecated。
+                # deepseek 是默认 provider,大多数旧 flat config 都走这里,warning 在此处触发足够。
+                if top_api_key or top_base_url:
+                    warnings.warn(
+                        "顶层 api_key/base_url 的 flat config 已 deprecated;"
+                        "请改用 providers.<name>.{api_key,base_url,model} 嵌套结构"
+                        "(参考 src/config.example.json)。",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
             self.base_url = self.base_url or "https://api.deepseek.com"
             self.model = self.model or "deepseek-v4-flash"
             if self.thinking_type is None:
