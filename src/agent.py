@@ -33,6 +33,7 @@ SESSION_TOOLS = {
 from openai import APITimeoutError, APIConnectionError, BadRequestError
 
 from llm_adapter import LLMClientAdapter
+from llm_adapter.response_parser import extract_reasoning
 from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
 from context_manager import MessageManager
 
@@ -455,13 +456,11 @@ class Agent:
                     if delta is None:
                         continue
 
-                    # Reasoning（多厂商兼容）：
-                    # - DeepSeek: delta.reasoning_content（标准）
-                    # - SenseNova: delta.model_extra['reasoning']（专有扩展）
-                    rc = getattr(delta, "reasoning_content", None)
-                    if not rc:
-                        model_extra = getattr(delta, "model_extra", None) or {}
-                        rc = model_extra.get("reasoning") if isinstance(model_extra, dict) else None
+                    # Reasoning(provider 无关) — 字段路径由 self.llm.reasoning_field 决定:
+                    # - DeepSeek/Agnes: delta.reasoning_content (OpenAI 标准字段)
+                    # - SenseNova:     delta.model_extra.reasoning (商汤专有扩展)
+                    # 路径来自 config 或 llm_adapter._DEFAULT_REASONING_FIELDS 默认表。
+                    rc = extract_reasoning(delta, self.llm.reasoning_field)
                     if rc:
                         accumulated_reasoning += rc
                         reasoning_yielded = True

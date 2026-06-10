@@ -27,6 +27,17 @@ _DEFAULT_CAPABILITIES: dict[str, frozenset] = {
 _FALLBACK_CAPABILITIES = frozenset({"chat", "tools"})   # 未知 provider 的最低限度
 
 
+# Step 3: provider 名 → 流式响应 reasoning 字段的 JSONPath
+# 同样可被 config.json providers.<name>.reasoning_field 字段覆盖。
+# 历史:旧 agent.py:458-464 用 if-else 在每个 chunk 上判断,Step 3 集中到这里。
+_DEFAULT_REASONING_FIELDS: dict[str, str] = {
+    "deepseek":  "delta.reasoning_content",        # OpenAI 标准字段
+    "sensenova": "delta.model_extra.reasoning",    # 商汤专有扩展(走 model_extra)
+    "agnes":     "delta.reasoning_content",        # 用 OpenAI 标准
+}
+_FALLBACK_REASONING_FIELD = "delta.reasoning_content"   # OpenAI 通用兼容
+
+
 class LLMClient:
     """模型适配层:统一管理不同大模型服务商(如 DeepSeek, SenseNova, Agnes)的连接与调用细节。"""
 
@@ -182,6 +193,14 @@ class LLMClient:
         else:
             self._capabilities = _DEFAULT_CAPABILITIES.get(self.provider, _FALLBACK_CAPABILITIES)
 
+        # 6. Step 3: 解析 reasoning_field
+        # 优先级:provider block 显式 "reasoning_field" > _DEFAULT_REASONING_FIELDS > _FALLBACK
+        # __init__ 阶段算一次缓存,property 直接 return — agent.py 流式循环每 chunk 查一次,需热路径性能。
+        self._reasoning_field = (
+            provider_block.get("reasoning_field")
+            or _DEFAULT_REASONING_FIELDS.get(self.provider, _FALLBACK_REASONING_FIELD)
+        )
+
     # ────────────────────────── 公开 getter(旧接口,保留) ──────────────────────────
 
     def get_model_name(self) -> str:
@@ -216,13 +235,17 @@ class LLMClient:
 
     @property
     def reasoning_field(self) -> str:
-        """响应流 reasoning 字段的 JSONPath。Step 3 会改成读 cfg.reasoning_field。
+        """响应流 reasoning 字段的 JSONPath。Step 3 实现:
 
-        Step 1 占位实现:按 provider 返回旧 agent.py:461-464 的硬编码路径。
+          1. config.json providers.<name>.reasoning_field 显式声明优先
+          2. 否则用 _DEFAULT_REASONING_FIELDS 表(deepseek/agnes→delta.reasoning_content,
+             sensenova→delta.model_extra.reasoning)
+          3. 都没有则用 _FALLBACK_REASONING_FIELD = "delta.reasoning_content"(OpenAI 标准)
+
+        实例属性 self._reasoning_field 在 __init__ 算一次缓存 — agent.py 流式循环
+        每 chunk 都查一次,property 不能含 dict 查找/getattr 链。
         """
-        if self.provider == "sensenova":
-            return "delta.model_extra.reasoning"
-        return "delta.reasoning_content"
+        return self._reasoning_field
 
     @property
     def quirks(self) -> tuple:
