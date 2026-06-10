@@ -188,17 +188,17 @@ export function useAgentSession(opts: {
   // === sendSetStreamMode — 切换流式 / 非流式 ===
   // 行为:
   //   - 乐观更新本地 state (点击立刻有反馈, 不等 round-trip)
-  //   - 发 WS set_stream_mode 消息, 后端处理后会回 stream_mode_changed 帧
-  //   - 后端回帧时再 setStreamMode(校正), 保证最终状态以服务端为准
-  // 失败 (WS 断开) 时本地状态与后端不一致, 用户再次点击会重试对齐
+  //   - WS 已 OPEN 时发 set_stream_mode 消息, 后端回 stream_mode_changed 帧校正
+  //   - WS 未连接时(新对话空状态 / 重连中)只更新本地; 下次 start 帧会带新值
+  //     (start 帧构造处直接读 streamMode, 见下方 start()), 不会丢
+  // 返回值: 本地状态是否已更新(总是 true, 兼容旧调用方 page.tsx 不看返回值)
   const sendSetStreamMode = useCallback((mode: boolean) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return false;
+    setStreamMode(mode);  // 乐观更新 — 总是先执行, 与 WS 状态解耦
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({ type: "set_stream_mode", stream_mode: mode })
+      );
     }
-    setStreamMode(mode);  // 乐观更新
-    wsRef.current.send(
-      JSON.stringify({ type: "set_stream_mode", stream_mode: mode })
-    );
     return true;
   }, []);
 
