@@ -37,6 +37,7 @@ from llm_adapter.response_parser import extract_reasoning
 from llm_adapter.quirks import apply_quirk, QuirkAction
 from docx_tools import call_tool
 from context_manager import MessageManager
+from state_machine import WorkflowTransitions, TransitionDirective
 
 
 # 流式调用可重试的异常（pre-stream 阶段）
@@ -677,50 +678,45 @@ class Agent:
                 yield {"type": "content", "delta": f"\n\n*[系统引导] {guidance}*"}
                 continue
 
-            # 状态机转换检查
+            # 状态机转换检查 (Step C: 评估逻辑已迁到 state_machine.WorkflowTransitions)
             if self.workflow_state == STYLE_REVIEW:
-                called = self.stage_called_tools.get(STYLE_REVIEW, set())
-                if "analyze_docx_style_samples" not in called or "bind_styles_to_roles" not in called:
-                    correction_msg = (
-                        "请先调用 analyze_docx_style_samples 分析样式，"
-                        "再读取 style_samples 数组并显式调用 bind_styles_to_roles"
-                        "（bindings 必须填 5 个标准角色的 sample_id），"
-                        "最后再让用户审核。"
+                # 反复评估直到 directive 不是 yield_approval (即用户已审批 / 错误 / revise)
+                while True:
+                    directive = WorkflowTransitions.evaluate_style_review(
+                        self.stage_called_tools, self._pending_feedback,
                     )
-                    self.msg_mgr.append_user(correction_msg)
-                    self._append_log("阶段校验失败", {"reason": "未完成样式分析与角色绑定", "correction": correction_msg})
-                    yield {"type": "content", "delta": f"\n\n*[系统提示] {correction_msg}*"}
-                    continue
-
-                self._append_log("等待用户确认样式审核", {"state": self.workflow_state})
-                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
-                self._checkpoint()  # Checkpoint 4: STYLE_REVIEW 审批挂起前落盘
-                yield {"type": "wait_approval", "phase": STYLE_REVIEW, "content": accumulated_content}
-                # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
-
-                # 恢复时读取用户反馈
-                feedback = self._pending_feedback
-                self._pending_feedback = None
-
-                if feedback.get("type") != "approve":
-                    self._append_log("非预期指令，关闭连接", feedback)
-                    yield {"type": "error", "message": "指令类型应为 approve"}
-                    return
-
-                approved = feedback.get("approved", False)
-                fb_text = feedback.get("feedback", "").strip()
-                self._append_log("用户样式审核确认", {"approved": approved, "feedback": fb_text})
-
-                if approved:
-                    self.stage_called_tools.pop(STYLE_REVIEW, None)
-                    self.workflow_state = MD_DRAFT
-                    self.draft_files_written = []   # 新一轮草稿周期, 清空旧路径
-                    self._append_log("状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
-                    continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
-                    self.msg_mgr.append_user(continue_msg)
-                else:
-                    self.msg_mgr.append_user(f"用户未确认样式审核结果，并给出反馈意见：{fb_text}。请重新分析样式与结构。")
-                continue
+                    self._pending_feedback = None
+                    if directive.action == "correct":
+                        self._append_log("阶段校验失败", {"reason": "未完成样式分析与角色绑定", "correction": directive.user_message})
+                        self.msg_mgr.append_user(directive.user_message)
+                        yield directive.extra_event
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "yield_approval":
+                        self._append_log("等待用户确认样式审核", {"state": self.workflow_state})
+                        self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
+                        self._checkpoint()  # Checkpoint 4: STYLE_REVIEW 审批挂起前落盘
+                        yield {"type": "wait_approval", "phase": directive.phase, "content": accumulated_content}
+                        # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
+                        # 继续 inner while, 此时 _pending_feedback 已被设置, 下一轮 evaluate 走 advance/revise
+                        continue
+                    if directive.action == "advance":
+                        self._append_log("用户样式审核确认", {"approved": True, "feedback": ""})
+                        self.stage_called_tools.pop(STYLE_REVIEW, None)
+                        self.workflow_state = directive.to_state
+                        if directive.should_clear_drafts:
+                            self.draft_files_written = []   # 新一轮草稿周期, 清空旧路径
+                        self._append_log("状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "revise":
+                        if directive.extra_event and directive.extra_event.get("type") == "error":
+                            self._append_log("非预期指令，关闭连接", {"feedback": directive.user_message})
+                            yield directive.extra_event
+                            return
+                        self._append_log("用户样式审核确认", {"approved": False, "feedback": directive.user_message})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                continue  # 退出本块, 回到 step 主 while 顶部
 
             if self.workflow_state == MD_DRAFT:
                 # 读取本轮所有写过的草稿文件, 用 === filename === 分隔
@@ -731,32 +727,37 @@ class Agent:
                         draft_parts.append(f"=== {p.name} ===\n{p.read_text(encoding='utf-8')}")
                 draft_content = "\n\n".join(draft_parts) if draft_parts else ""
 
-                self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
-                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
-                self._checkpoint()  # Checkpoint 5: MD_DRAFT 审批挂起前落盘
-                yield {"type": "wait_approval", "phase": MD_DRAFT, "content": accumulated_content, "draft_content": draft_content}
-
-                feedback = self._pending_feedback
-                self._pending_feedback = None
-
-                if feedback.get("type") != "approve":
-                    self._append_log("非预期指令，关闭连接", feedback)
-                    yield {"type": "error", "message": "指令类型应为 approve"}
-                    return
-
-                approved = feedback.get("approved", False)
-                fb_text = feedback.get("feedback", "").strip()
-                self._append_log("用户草稿确认", {"approved": approved, "feedback": fb_text})
-
-                if approved:
-                    self.workflow_state = WORD_EDITING
-                    self._append_log("状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
-                    continue_msg = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，用 markdown_to_word 的 actions 编译写入 Word，最后调用 diff_docx 验证。"
-                    self.msg_mgr.append_user(continue_msg)
-                else:
-                    self.draft_files_written = []   # 修订循环, 清空旧草稿路径
-                    self.msg_mgr.append_user(f"用户未通过 Markdown 草稿，修改建议：{fb_text}。请利用 write_markdown_draft 修订草稿并展示给用户。")
-                continue
+                # 反复评估直到 directive 不是 yield_approval
+                while True:
+                    directive = WorkflowTransitions.evaluate_md_draft(
+                        self.stage_called_tools, self.draft_files_written, draft_content, self._pending_feedback,
+                    )
+                    self._pending_feedback = None
+                    if directive.action == "yield_approval":
+                        self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
+                        self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
+                        self._checkpoint()  # Checkpoint 5: MD_DRAFT 审批挂起前落盘
+                        yield {"type": "wait_approval", "phase": directive.phase, "content": accumulated_content, "draft_content": draft_content}
+                        # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
+                        # 继续 inner while, 此时 _pending_feedback 已被设置, 下一轮 evaluate 走 advance/revise
+                        continue
+                    if directive.action == "advance":
+                        self._append_log("用户草稿确认", {"approved": True, "feedback": ""})
+                        self.workflow_state = directive.to_state
+                        self._append_log("状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "revise":
+                        if directive.extra_event and directive.extra_event.get("type") == "error":
+                            self._append_log("非预期指令，关闭连接", {"feedback": directive.user_message})
+                            yield directive.extra_event
+                            return
+                        self._append_log("用户草稿确认", {"approved": False, "feedback": directive.user_message})
+                        if directive.should_clear_drafts:
+                            self.draft_files_written = []   # 修订循环, 清空旧草稿路径
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                continue  # 退出本块, 回到 step 主 while 顶部
 
             # WORD_EDITING 结束
             self._append_log("写入与编译流完成", {"state": self.workflow_state})
