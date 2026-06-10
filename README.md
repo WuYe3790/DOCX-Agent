@@ -100,33 +100,51 @@ Fire-and-forget 后台任务，**不阻塞 stream**：
 
 ### 配置
 
-复制并编辑 `src/config.json`（gitignored）：
+复制并编辑 `src/config.json`（gitignored）。**v2 schema**（commit `8d03835` refactor/llm-adapter-registry 落地后，新接入 LLM provider 只需在 `providers` 块加 4 行，无需改任何 .py 代码）：
 
 ```json
 {
-  "provider": "deepseek",
+  "provider": "通用接口",
+  "provider_profiles": {
+    "openai_compatible": {
+      "capabilities": ["chat", "tools"],
+      "reasoning_field": "delta.reasoning_content",
+      "forward_tool_choice": false,
+      "quirks": [],
+      "extra_body_template": null,
+      "top_level_kwargs": {}
+    }
+  },
   "providers": {
-    "deepseek": {
-      "api_key": "your-api-key",
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-flash",
-      "thinking": "enabled"
-    },
-    "sensenova": {
-      "api_key": "your-api-key",
-      "base_url": "https://token.sensenova.cn/v1",
-      "model": "sensenova-6.7-flash-lite",
-      "reasoning_effort": "high"
+    "通用接口": {
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://your-endpoint.example.com/v1",
+      "model": "your-model-name"
     }
   }
 }
 ```
 
-也支持环境变量：
+完整示例（4 种典型定制形态）见 `src/config.example.json`。
+
+也支持环境变量覆盖（`src/llm_adapter/provider.py` 实现，优先级：env > config）：
 
 ```powershell
-$env:DEEPSEEK_API_KEY="your-key"
-$env:LLM_PROVIDER="deepseek"
+# 选 provider
+$env:LLM_PROVIDER="通用接口"
+
+# API key (任选其一, LLM_API_KEY 通用 fallback)
+$env:DEEPSEEK_API_KEY="your-key"   # 或 SENSENOVA_API_KEY / AGNES_API_KEY / OPENAI_API_KEY
+$env:LLM_API_KEY="your-key"        # 通用
+
+# Endpoint / 模型
+$env:DEEPSEEK_BASE_URL="https://api.deepseek.com"
+$env:LLM_MODEL="deepseek-chat"      # 或 OPENAI_MODEL / AGNES_MODEL
+
+# Thinking / reasoning
+$env:DOCX_AGENT_THINKING="enabled"
+$env:SENSENOVA_REASONING_EFFORT="high"
 ```
 
 ### 运行（v2 必起双服务）
@@ -158,17 +176,29 @@ python src/docx_agent_demo.py
 
 ## 测试
 
-v2 完整测试套 43/43 通过（`tests/test_step{1-5}.py`）：
+v2 完整测试套 **138/138** 通过（`tests/`，13 个 file）：
 
 | 测试 | 范围 | 通过 |
 |------|------|------|
-| `test_step1.py` | Agent save/load + 异步锁 + 5 Checkpoint | 5/5 |
-| `test_step2.py` | WS `start`/`resume` 协议 + `session_created`/`history` 响应（6 个分支） | 6/6 |
+| `test_step1.py` | Agent save/load + 异步锁 + 6 Checkpoint | 5/5 |
+| `test_step2.py` | WS `start`/`resume` 协议 + `session_created`/`history` 响应（6 个分支）+ `isolate_sessions_root` fixture 隔离 SESSIONS_ROOT 跨 file 污染 | 6/6 |
 | `test_step3.py` | HTTP 控制面 3 endpoint (sessions list/get/delete) + 旧 draft API 删除 | 8/8 |
 | `test_step4.py` | dispatcher 隐式注入 session_id + 6 工具沙箱化 + 路径守卫 | 10/10 |
-| `test_step5.py` | 前端删 IndexedDB + HTTP fetch + next.config.ts rewrites（10 + 4 fixup） | 14/14 |
+| `test_step5.py` | 前端删 IndexedDB + HTTP fetch + next.config.ts rewrites（10 + 5 fixup，含 `test_page_tsx_startup_does_not_auto_resume` v2.2 新加） | 15/15 |
+| `test_agent_blocking.py` | 非流式路径（`create_chat_completion_blocking`，商汤 SSE stall 修复） | 7/7 |
+| `test_stream_incomplete_retry.py` | B 方案流不完整重试（`finish_reason=None` 防御） | 4/4 |
+| `test_llm_adapter_step1_parity.py` | llm_adapter 请求构建 parity（profile 化前/后等价） | 13/13 |
+| `test_llm_adapter_step2_capability.py` | capability 接口（`has_capability`） | 14/14 |
+| `test_llm_adapter_step3_reasoning.py` | `extract_reasoning` 抽象（`reasoning_field` 路径） | 14/14 |
+| `test_llm_adapter_step4_quirks.py` | quirk 注册与 `apply_quirk` | 12/12 |
+| `test_llm_adapter_step5_profiles.py` | profile 配置化 + 数据驱动注入 | 22/22 |
+| `test_llm_adapter_step6_cleanup.py` | 清理遗留 + `DeprecationWarning` | 8/8 |
 
 ```bash
+# 推荐: 跑全部
+python -m pytest tests/
+
+# 单跑 step 文件
 python tests/test_step1.py
 python tests/test_step2.py
 python tests/test_step3.py
@@ -178,11 +208,18 @@ python tests/test_step5.py
 
 ## 支持的 LLM
 
-| 提供商 | 默认模型 | 说明 |
-|--------|---------|------|
-| **DeepSeek** | `deepseek-v4-flash` | 支持 `thinking` 链 |
-| **SenseNova (商汤)** | `sensenova-6.7-flash-lite` | 支持 `reasoning_effort`；多模态识图回退方案 |
-| **OpenAI 兼容** | `gpt-4o` | 兼容标准 OpenAI API 的第三方服务 |
+v2 设计：**profile + 任意 OpenAI 兼容 provider**，新接入 4 行（`api_key` / `base_url` / `model` / 可选 `profile`）即可，无需改任何 `.py` 代码。详见 [配置](#配置) 段的 v2 schema 示例与 `src/config.example.json`。
+
+内置 provider 别名（`src/llm_adapter/provider.py` 通过 env var 切换，不需要在 `config.json` 里建块）：
+
+| 别名 | 适用 | env var |
+|------|------|---------|
+| DeepSeek | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `LLM_MODEL` |
+| SenseNova (商汤) | `https://token.sensenova.cn/v1` | `SENSENOVA_API_KEY` / `SENSENOVA_BASE_URL` / `SENSENOVA_REASONING_EFFORT` |
+| AGNES | AGNES 网关 | `AGNES_API_KEY` / `AGNES_BASE_URL` / `AGNES_MODEL` |
+| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` |
+
+通用 fallback：`LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` / `DOCX_AGENT_THINKING` / `LLM_REASONING_EFFORT`。
 
 ## 工具总览（v2 沙箱化）
 
