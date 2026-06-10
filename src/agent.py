@@ -35,8 +35,10 @@ from openai import APITimeoutError, APIConnectionError, BadRequestError
 from llm_adapter import LLMClientAdapter
 from llm_adapter.response_parser import extract_reasoning
 from llm_adapter.quirks import apply_quirk, QuirkAction
-from docx_tools import TOOLS_SCHEMA, call_tool, render_tools_prompt
+from docx_tools import call_tool
 from context_manager import MessageManager
+from state_machine import WorkflowTransitions, TransitionDirective
+from session_persistence import SessionPersistence
 
 
 # 流式调用可重试的异常（pre-stream 阶段）
@@ -72,100 +74,19 @@ def append_log(log_path, title, data=None):
                 f.write(json.dumps(data, ensure_ascii=False, indent=2, default=str))
             f.write("\n")
 
-# 常量
-STYLE_REVIEW = "style_review"
-MD_DRAFT = "md_draft"
-WORD_EDITING = "word_editing"
-
-REVIEW_TOOL_NAMES = {"analyze_docx_style_samples", "bind_styles_to_roles", "read_docx_structure", "ls"}
-MD_DRAFT_TOOL_NAMES = {
-    "write_markdown_draft",
-    "read_markdown_draft",
-    "parse_markdown_draft",
-    "ls",
-    "read",
-    "analyze_image_content",
-}
-WORD_EDITING_TOOL_NAMES = {
-    "read_docx_structure",
-    "write_markdown_draft",
-    "read_markdown_draft",
-    "parse_markdown_draft",
-    "markdown_to_word",
-    "diff_docx",
-    "ls",
-    "read",
-    "analyze_image_content",
-}
-
-SYSTEM_PROMPT = """
-你是一个精细 DOCX 编辑 agent。
-
-目标：
-1. 先读取文档结构或查找锚点，不要盲改。
-2. 插入文字时优先保留原 run 格式。
-3. 编辑后必须调用 diff_docx 验证变化。
-4. 只解释和用户请求相关的变化，注意区分 word/document.xml 的业务变化和 Office 保存噪声。
-5. 表格 action 的 table_index 按 //w:tbl 全文计数，嵌套表格也会计数；调用前必须用 read_docx_structure 返回的 depth、父表格坐标、direct_text 确认目标表格、行、列。普通正文 action 使用 write_markdown_to_paragraph（支持段落、标题、列表、图片、表格等所有元素在段落流中的动态编译与自动创建），必须同时传入 paragraph_index 和 anchor_text 定位，以防文本错位插入。
-6. 工具由程序按当前状态动态提供。你只能调用当前可见工具，不要臆造不可见工具。
-7. 当需要理解图表、截图、排版样式等图片视觉内容时，使用 analyze_image_content 进行多模态识图确认，不要凭文件名猜测图片内容。
-8. 当需要查看外部代码、Markdown 文档或其他文本文件内容时，使用 read 工具。大文件用 offset/limit 分段读取，每次不超过 500 行以免上下文溢出。
-""".strip()
-
-
-def tool_schemas_for_state(state: str):
-    if state == STYLE_REVIEW:
-        allowed = REVIEW_TOOL_NAMES
-    elif state == MD_DRAFT:
-        allowed = MD_DRAFT_TOOL_NAMES
-    else:
-        allowed = WORD_EDITING_TOOL_NAMES
-    return [schema for schema in TOOLS_SCHEMA if schema["function"]["name"] in allowed]
-
-
-def state_prompt(state: str, available_tool_schemas) -> str:
-    if state == STYLE_REVIEW:
-        state_rule = """
-当前状态：样式审核。
-你的任务：仅对模板文档进行只读分析，提取格式特征与文档结构。
-规则：
-1. 你现在只能做样式和结构分析，不能编辑文档。
-2. 请优先调用 analyze_docx_style_samples；若文档路径不明确，可用 ls 查看目录找到 docx 文件后调用 read_docx_structure。ls 仅用于定位文档路径，严禁浏览与文档无关的其他目录。
-3. 此阶段唯一目标是提取 docx 自身的样式和结构信息。如果用户请求中提到了与 docx 不相关的其他文件或目录（如代码、截图、图片等），在本阶段完全忽略它们。你当前阶段的唯一有效输出是样式分析结果，其他意图均无法执行。
-4. 拿到样式样本后，用简短中文列出你建议的正文、章节标题、表格字段名、表格填写值等 sample_id 与文档结构概述，并提示用户核对。
-5. 在用户确认样式之前，你必须调用 bind_styles_to_roles，**先读取 style_samples 数组**（每个 sample 的 format / paragraph_format / context 字段），根据字体/字号/颜色/上下文为 5 个标准角色（title / section_heading / body / table_cell / placeholder）**各显式选一个最匹配的 sample_id**，通过 bindings 参数传入。**不允许省略任何角色，也不允许凭印象分配**——找不到合适 sample 的角色也要选最接近的。
-6. 列出样式建议和结构概述后，你必须立刻停止回答并等待用户确认！不要继续查看其他目录或文件，不要谈及草稿生成或下一阶段工作。
-""".strip()
-    elif state == MD_DRAFT:
-        state_rule = """
-当前状态：Markdown 草稿生成。
-你的任务：根据第一阶段确定的样式特征与用户的需求内容，编写出用于填入 Word 的 Markdown 草稿文件。
-规则：
-1. 你现在只能生成、读取和解析 Markdown 草稿，不能编辑 docx。
-2. 请针对每个需要填写的文档区域，依次调用 write_markdown_draft 生成对应的 Markdown 文件（如 03_flowchart.md, 04_experiment_process.md, 06_ai_disclosure.md 等），保存到 out/drafts。若无法一次性生成，必须分多轮连续调用工具生成，直至把所有需要填写的区域草稿全部写完。
-3. 长正文块可以单独生成 Markdown 文件，例如 experiment_platform.md 等。
-4. 每个片段只写最终要进入 Word 的内容，不要包含编辑计划。
-5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。先用 analyze_image_content 理解图片内容再写描述，不要仅凭文件名猜测。
-6. 如需参考外部代码、报告 md 文件或测试用例等内容作为草稿素材，使用 read 工具读取。
-7. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
-8. 只有在所有规划的草稿文件都通过 write_markdown_draft 写入磁盘后，才允许展示整体草稿结构，并用简短文字告知用户已完成全部草稿的写入，然后停止回答等待用户审核。在用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
-""".strip()
-    else:
-        state_rule = """
-当前状态：Word 写入与编译。
-你的任务：将用户确认的 Markdown 草稿通过编译器写入并替换到 Word 模板对应的位置，最后进行比对验证。
-规则：
-1. 你现在只能读取 Word 结构、解析 Markdown 片段、调用 markdown_to_word 编译写入，并用 diff_docx 验证。
-2. 写入前用 read_docx_structure 确认目标位置，用 parse_markdown_draft 确认 Markdown block_id/support/diagnostics。
-3. 普通正文写入只用 write_markdown_to_paragraph（支持段落、标题、列表、图片、表格流式编译与自动生成）；表格单元格写入只用 write_markdown_to_table_cell。
-4. 填充或替换占位段落时，用 write_markdown_to_paragraph 的 mode=replace；需要追加内容时使用 mode=after。
-5. 一个 Markdown 文件有多个区域时，用 include_block_ids 或 line_start/line_end 选择局部块。
-6. 不要引用 markdown_to_word 返回的 temporary_output_path；多步编辑应放在同一次 markdown_to_word.actions 中。
-7. 如果 Markdown 片段不适合写入，可以用 write_markdown_draft 修订草稿，但不能绕过 markdown_to_word 直接编辑 docx。
-8. 写入后必须调用 diff_docx 验证变化。
-""".strip()
-
-    return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"
+# === 提示词与状态名常量已迁移到 src/prompts.py (Step A 重构) ===
+# 这里重导出以保持 `from agent import SYSTEM_PROMPT` 等旧 import 兼容
+from prompts import (
+    STYLE_REVIEW,
+    MD_DRAFT,
+    WORD_EDITING,
+    REVIEW_TOOL_NAMES,
+    MD_DRAFT_TOOL_NAMES,
+    WORD_EDITING_TOOL_NAMES,
+    SYSTEM_PROMPT,
+    tool_schemas_for_state,
+    state_prompt,
+)
 
 
 class Agent:
@@ -212,74 +133,19 @@ class Agent:
         # === v2: 持久化相关 ===
         self.session_id = session_id
         self.session_dir = session_dir  # Path("out") / "sessions" / session_id
-        self._save_lock = asyncio.Lock()  # 写盘异步锁 (避坑 2: tool_start/tool_end 间隔 < 几毫秒 时的文件写花)
+        # Step B: 持久化层已抽出到 src/session_persistence.py
+        # 用 weakref 避免双向循环引用 (用户补丁 1), lock 移入 persistence 内部
+        self._persistence = SessionPersistence(self)
 
-    # ─── v2 持久化: save/load + 锁 + Checkpoint ────
+    # ─── v2 持久化: 委托给 SessionPersistence ────
 
     def _checkpoint(self) -> None:
-        """5 个 Checkpoint 触发点统一调用: fire-and-forget 后台 save"""
-        if self.session_dir:  # 无 session_dir 时 (测试场景) 跳过
-            asyncio.create_task(self._background_save())
-
-    async def _background_save(self) -> None:
-        """异步串行化写盘: 同一 session 同一时刻只有一个写盘线程"""
-        if not self.session_dir:
-            return
-        async with self._save_lock:  # 锁
-            await asyncio.to_thread(self.save_to_disk)
+        """5 个 Checkpoint 触发点统一调用: 委托给 SessionPersistence"""
+        self._persistence.checkpoint()
 
     def save_to_disk(self) -> None:
-        """同步写盘 (实际 I/O 在 thread) - 序列化 3 个 JSON 到 self.session_dir"""
-        if not self.session_dir:
-            return
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        (self.session_dir / "metadata.json").write_text(
-            json.dumps(self._metadata_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        (self.session_dir / "messages.json").write_text(
-            json.dumps(self._messages_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        (self.session_dir / "workflow.json").write_text(
-            json.dumps(self._workflow_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        # 注意: 草稿文件 (.md) / style_profiles/ / uploads/ **不需要** "snapshot" 复制 —
-        # 它们从诞生起就在 session_dir/drafts/ / style_profiles/ / uploads/ 下
-        # (工具 dispatcher 隐式注入 session_id 派生 session_dir 写入, 避坑 1)
-
-    def _metadata_dict(self) -> dict:
-        from datetime import datetime
-        return {
-            "session_id": self.session_id,
-            "title": (Path(self.docx_path).stem if self.docx_path else "新会话"),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "docx_path": self.docx_path,
-            "provider": self.llm.get_provider() if hasattr(self.llm, "get_provider") else "",
-            "model": self.llm.get_model_name() if hasattr(self.llm, "get_model_name") else "",
-            "workflow_state": self.workflow_state,
-            "session_complete": False,
-            "pending_approval": self._pending_approval,  # v2: resume 时供 server.py 推 isWaitingApproval
-        }
-
-    def _messages_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "system_prompt": self.msg_mgr._system_prompt,
-            "entries": list(self.msg_mgr._entries),
-            "total_input_tokens": self.msg_mgr._total_input_tokens,
-            "last_prompt_tokens": self.msg_mgr._last_prompt_tokens,
-        }
-
-    def _workflow_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "workflow_state": self.workflow_state,
-            "stage_called_tools": {k: sorted(v) for k, v in self.stage_called_tools.items()},
-            "draft_files_written": list(self.draft_files_written),
-            "round_index": self._round_index,
-        }
+        """同步写盘 — 委托给 SessionPersistence (向后兼容, 测试 / 旧调用方用)"""
+        self._persistence.save_sync()
 
     @classmethod
     def load_from_disk(
@@ -287,9 +153,8 @@ class Agent:
         system_prompt: str, docx_path: str = "", log_path: Optional[Path] = None
     ) -> "Agent":
         """从 session_dir 反序列化 Agent 状态 (Step 2 server.py resume 时调用)"""
-        metadata = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
-        messages_data = json.loads((session_dir / "messages.json").read_text(encoding="utf-8"))
-        workflow = json.loads((session_dir / "workflow.json").read_text(encoding="utf-8"))
+        # Step B: 读 3 个 JSON 委托给 SessionPersistence
+        metadata, messages_data, workflow = SessionPersistence.read_session_files(session_dir)
 
         msg_mgr = MessageManager(system_prompt)
         msg_mgr._entries = list(messages_data["entries"])
@@ -758,50 +623,45 @@ class Agent:
                 yield {"type": "content", "delta": f"\n\n*[系统引导] {guidance}*"}
                 continue
 
-            # 状态机转换检查
+            # 状态机转换检查 (Step C: 评估逻辑已迁到 state_machine.WorkflowTransitions)
             if self.workflow_state == STYLE_REVIEW:
-                called = self.stage_called_tools.get(STYLE_REVIEW, set())
-                if "analyze_docx_style_samples" not in called or "bind_styles_to_roles" not in called:
-                    correction_msg = (
-                        "请先调用 analyze_docx_style_samples 分析样式，"
-                        "再读取 style_samples 数组并显式调用 bind_styles_to_roles"
-                        "（bindings 必须填 5 个标准角色的 sample_id），"
-                        "最后再让用户审核。"
+                # 反复评估直到 directive 不是 yield_approval (即用户已审批 / 错误 / revise)
+                while True:
+                    directive = WorkflowTransitions.evaluate_style_review(
+                        self.stage_called_tools, self._pending_feedback,
                     )
-                    self.msg_mgr.append_user(correction_msg)
-                    self._append_log("阶段校验失败", {"reason": "未完成样式分析与角色绑定", "correction": correction_msg})
-                    yield {"type": "content", "delta": f"\n\n*[系统提示] {correction_msg}*"}
-                    continue
-
-                self._append_log("等待用户确认样式审核", {"state": self.workflow_state})
-                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
-                self._checkpoint()  # Checkpoint 4: STYLE_REVIEW 审批挂起前落盘
-                yield {"type": "wait_approval", "phase": STYLE_REVIEW, "content": accumulated_content}
-                # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
-
-                # 恢复时读取用户反馈
-                feedback = self._pending_feedback
-                self._pending_feedback = None
-
-                if feedback.get("type") != "approve":
-                    self._append_log("非预期指令，关闭连接", feedback)
-                    yield {"type": "error", "message": "指令类型应为 approve"}
-                    return
-
-                approved = feedback.get("approved", False)
-                fb_text = feedback.get("feedback", "").strip()
-                self._append_log("用户样式审核确认", {"approved": approved, "feedback": fb_text})
-
-                if approved:
-                    self.stage_called_tools.pop(STYLE_REVIEW, None)
-                    self.workflow_state = MD_DRAFT
-                    self.draft_files_written = []   # 新一轮草稿周期, 清空旧路径
-                    self._append_log("状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
-                    continue_msg = "用户已确认样式审核结果。请基于最初任务和当前上下文，先生成 Markdown 草稿并保存到 out/drafts，然后读取或解析草稿供用户审核；不要编辑 docx。"
-                    self.msg_mgr.append_user(continue_msg)
-                else:
-                    self.msg_mgr.append_user(f"用户未确认样式审核结果，并给出反馈意见：{fb_text}。请重新分析样式与结构。")
-                continue
+                    self._pending_feedback = None
+                    if directive.action == "correct":
+                        self._append_log("阶段校验失败", {"reason": "未完成样式分析与角色绑定", "correction": directive.user_message})
+                        self.msg_mgr.append_user(directive.user_message)
+                        yield directive.extra_event
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "yield_approval":
+                        self._append_log("等待用户确认样式审核", {"state": self.workflow_state})
+                        self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
+                        self._checkpoint()  # Checkpoint 4: STYLE_REVIEW 审批挂起前落盘
+                        yield {"type": "wait_approval", "phase": directive.phase, "content": accumulated_content}
+                        # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
+                        # 继续 inner while, 此时 _pending_feedback 已被设置, 下一轮 evaluate 走 advance/revise
+                        continue
+                    if directive.action == "advance":
+                        self._append_log("用户样式审核确认", {"approved": True, "feedback": ""})
+                        self.stage_called_tools.pop(STYLE_REVIEW, None)
+                        self.workflow_state = directive.to_state
+                        if directive.should_clear_drafts:
+                            self.draft_files_written = []   # 新一轮草稿周期, 清空旧路径
+                        self._append_log("状态流转", {"from": STYLE_REVIEW, "to": MD_DRAFT})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "revise":
+                        if directive.extra_event and directive.extra_event.get("type") == "error":
+                            self._append_log("非预期指令，关闭连接", {"feedback": directive.user_message})
+                            yield directive.extra_event
+                            return
+                        self._append_log("用户样式审核确认", {"approved": False, "feedback": directive.user_message})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                continue  # 退出本块, 回到 step 主 while 顶部
 
             if self.workflow_state == MD_DRAFT:
                 # 读取本轮所有写过的草稿文件, 用 === filename === 分隔
@@ -812,32 +672,37 @@ class Agent:
                         draft_parts.append(f"=== {p.name} ===\n{p.read_text(encoding='utf-8')}")
                 draft_content = "\n\n".join(draft_parts) if draft_parts else ""
 
-                self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
-                self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
-                self._checkpoint()  # Checkpoint 5: MD_DRAFT 审批挂起前落盘
-                yield {"type": "wait_approval", "phase": MD_DRAFT, "content": accumulated_content, "draft_content": draft_content}
-
-                feedback = self._pending_feedback
-                self._pending_feedback = None
-
-                if feedback.get("type") != "approve":
-                    self._append_log("非预期指令，关闭连接", feedback)
-                    yield {"type": "error", "message": "指令类型应为 approve"}
-                    return
-
-                approved = feedback.get("approved", False)
-                fb_text = feedback.get("feedback", "").strip()
-                self._append_log("用户草稿确认", {"approved": approved, "feedback": fb_text})
-
-                if approved:
-                    self.workflow_state = WORD_EDITING
-                    self._append_log("状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
-                    continue_msg = "用户已确认 Markdown 草稿。请读取 Word 结构并解析 Markdown IR，选择目标表格坐标和 style_mapping，用 markdown_to_word 的 actions 编译写入 Word，最后调用 diff_docx 验证。"
-                    self.msg_mgr.append_user(continue_msg)
-                else:
-                    self.draft_files_written = []   # 修订循环, 清空旧草稿路径
-                    self.msg_mgr.append_user(f"用户未通过 Markdown 草稿，修改建议：{fb_text}。请利用 write_markdown_draft 修订草稿并展示给用户。")
-                continue
+                # 反复评估直到 directive 不是 yield_approval
+                while True:
+                    directive = WorkflowTransitions.evaluate_md_draft(
+                        self.stage_called_tools, self.draft_files_written, draft_content, self._pending_feedback,
+                    )
+                    self._pending_feedback = None
+                    if directive.action == "yield_approval":
+                        self._append_log("等待用户确认 Markdown 草稿", {"state": self.workflow_state})
+                        self._pending_approval = True  # v2: 标记"等待审批", 供 server.py 在 history 响应里推 isWaitingApproval
+                        self._checkpoint()  # Checkpoint 5: MD_DRAFT 审批挂起前落盘
+                        yield {"type": "wait_approval", "phase": directive.phase, "content": accumulated_content, "draft_content": draft_content}
+                        # ⬆️ 生成器在这里暂停，等 ws_agent 调用 on_user_feedback() 后恢复
+                        # 继续 inner while, 此时 _pending_feedback 已被设置, 下一轮 evaluate 走 advance/revise
+                        continue
+                    if directive.action == "advance":
+                        self._append_log("用户草稿确认", {"approved": True, "feedback": ""})
+                        self.workflow_state = directive.to_state
+                        self._append_log("状态流转", {"from": MD_DRAFT, "to": WORD_EDITING})
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                    if directive.action == "revise":
+                        if directive.extra_event and directive.extra_event.get("type") == "error":
+                            self._append_log("非预期指令，关闭连接", {"feedback": directive.user_message})
+                            yield directive.extra_event
+                            return
+                        self._append_log("用户草稿确认", {"approved": False, "feedback": directive.user_message})
+                        if directive.should_clear_drafts:
+                            self.draft_files_written = []   # 修订循环, 清空旧草稿路径
+                        self.msg_mgr.append_user(directive.user_message)
+                        break  # 退出 inner while, 回到 step 主 while 跑 LLM
+                continue  # 退出本块, 回到 step 主 while 顶部
 
             # WORD_EDITING 结束
             self._append_log("写入与编译流完成", {"state": self.workflow_state})
