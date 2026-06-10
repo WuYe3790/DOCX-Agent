@@ -269,9 +269,19 @@ OpenXML lxml 元素树
 src/
 ├── docx_agent_demo.py         # CLI 入口
 ├── server.py                  # FastAPI + WebSocket + HTTP 控制面
-├── llm_adapter.py             # LLM 客户端抽象（DeepSeek / SenseNova / OpenAI 兼容）
+├── llm_adapter/               # LLM 客户端抽象（DeepSeek / SenseNova / OpenAI 兼容）
+│   ├── __init__.py            # 导出 LLMClientAdapter
+│   ├── provider.py            # LLMClient 主类（流式 + 非流式 + capability 接口）
+│   ├── config.py              # profile 配置加载
+│   ├── registry.py            # PROFILES + pick_capable_adapter
+│   ├── request_builder.py     # build_request_kwargs (Step 5 数据驱动注入)
+│   ├── response_parser.py     # extract_reasoning (Step 3 reasoning_field 抽象)
+│   └── quirks.py              # QuirkAction / QuirkDirective / apply_quirk (Step 4)
 ├── context_manager.py         # 消息管理（去重 + token 追踪）
-├── agent.py                   # Agent 核心类（async generator）+ 6 Checkpoint 写盘
+├── prompts.py                 # 状态名常量 + SYSTEM_PROMPT + state_prompt (Step A 拆出)
+├── state_machine.py           # WorkflowTransitions 静态评估 + TransitionDirective (Step C 拆出)
+├── session_persistence.py     # SessionPersistence 类 (Step B 拆出, weakref 避免循环引用)
+├── agent.py                   # Agent 核心类（async generator）+ 6 Checkpoint 委托
 ├── config.json                # API 配置（gitignored）
 ├── basic_tools/               # 基础工具
 │   ├── ls.py / read.py / analyze_image_content.py
@@ -303,19 +313,33 @@ src/
     └── sessions/              # v2: 每个 session 一个目录
         └── session-YYYYMMDD-HHMMSS/
             ├── metadata.json / messages.json / workflow.json
-            ├── logs/ / drafts/ / style_profiles/ / uploads/
+            ├── logs/ / drafts/ / style_profiles/              # uploads/ 在 v2.1 删 (前端无入口)
 
-frontend/                     # Next.js 16 (非标准, 看 frontend/AGENTS.md)
+frontend/                     # Next.js (非标准, 看 frontend/AGENTS.md)
 ├── app/
-│   ├── page.tsx              # 主交互页面 (~1100 行)
+│   ├── page.tsx              # 主交互页面 (~403 行, Step 6-9 拆出 ChatHeader/ChatInput/ChatMessageBlocks/ApprovalCheckpoint)
 │   ├── layout.tsx
-│   └── test-stream/
-├── components/                # SessionSidebar / PreviewPanel / EditorPanel ...
+│   ├── globals.css
+│   └── test-stream/          # 早期流式 demo (当前主流程不走)
+├── components/                # 9 个 UI 组件
+│   ├── session-sidebar.tsx   # 左侧 session 列表
+│   ├── chat-header.tsx       # Header bar (流式/非流式 toggle + sidebar 开关)
+│   ├── chat-input.tsx        # 底部 prompt 输入
+│   ├── chat-message-blocks.tsx # 4 种类型化消息块 (user/reasoning/content/toolGroup)
+│   ├── approval-checkpoint.tsx  # wait_approval 内联面板
+│   ├── preview-panel.tsx     # 右侧草稿预览 (md_draft 阶段自动展开)
+│   ├── animated-live-panel.tsx  # 实时流式动画
+│   ├── markdown-renderer.tsx # Markdown 渲染
+│   └── reasoning-panel.tsx   # 推理内容折叠展示
+├── hooks/
+│   └── use-agent-session.ts  # 核心 hook (Step 4 提取): WS 生命周期 + 实时流 + approval state
 ├── lib/
-│   └── session-types.ts      # 共享 SessionMeta type (v2: 删 lib/sessions.ts IndexedDB)
+│   ├── session-types.ts      # 共享 SessionMeta type (v2: 删 lib/sessions.ts IndexedDB)
+│   ├── message-types.ts      # 共享 Message / RenderBlock type (Step 1 提取)
+│   └── draft-types.ts        # 共享 DraftFile type
 └── next.config.ts             # rewrites 代理 /api/* -> 后端 :8000
 
-tests/                        # 43/43 测试通过
+tests/                        # 138/138 测试通过 (Step 2 fixture 隔离 SESSIONS_ROOT 跨 file 污染)
 ├── test_step1.py             # save/load + 锁 + Checkpoint
 ├── test_step2.py             # WS start/resume 协议
 ├── test_step3.py             # HTTP 控制面
