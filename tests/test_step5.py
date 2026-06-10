@@ -22,6 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent  # 仓库根
 FRONTEND = REPO_ROOT / "frontend"
 APP_PAGE = FRONTEND / "app" / "page.tsx"
+APP_HOOK = FRONTEND / "hooks" / "use-agent-session.ts"
 SESSION_SIDEBAR = FRONTEND / "components" / "session-sidebar.tsx"
 OLD_SESSIONS_LIB = FRONTEND / "lib" / "sessions.ts"
 NEW_SESSIONS_TYPES = FRONTEND / "lib" / "session-types.ts"
@@ -81,10 +82,15 @@ def test_page_tsx_uses_http_sessions_api():
 
 
 def test_page_tsx_handles_session_created_and_history():
-    """Test 6: page.tsx onmessage 处理 'session_created' 和 'history' (v2 WS 协议)"""
-    content = read(APP_PAGE)
-    assert 'case "session_created"' in content, "page.tsx 应处理 'session_created' WS 响应 (start 成功)"
-    assert 'case "history"' in content, "page.tsx 应处理 'history' WS 响应 (resume 成功)"
+    """Test 6: page.tsx onmessage 处理 'session_created' 和 'history' (v2 WS 协议)
+
+    注: hook 提取 (commit 22c98c9) 后, WS onmessage switch 已搬到 use-agent-session.ts,
+    test 写于 hook 提取后 (f0361f7) 但读源仍是 page.tsx, 一直没跟 refactor 调整.
+    修复: 改读 hook 文件, 实现确实在 hook 里 (use-agent-session.ts:253/266).
+    """
+    content = read(APP_HOOK)
+    assert 'case "session_created"' in content, "hook 应处理 'session_created' WS 响应 (start 成功)"
+    assert 'case "history"' in content, "hook 应处理 'history' WS 响应 (resume 成功)"
     # session_created 应包含 setCurrentSessionId(data.session_id)
     # 用更简单的子串匹配, 避免 { } 嵌套
     assert "setCurrentSessionId(data.session_id)" in content, "page.tsx 应 setCurrentSessionId(data.session_id)"
@@ -100,14 +106,20 @@ def test_page_tsx_handles_session_created_and_history():
 
 
 def test_start_agent_session_accepts_resume_param():
-    """Test 7: startAgentSession 接受 resumeSessionId 第三参数 (用于 resume)"""
-    content = read(APP_PAGE)
-    # 匹配: const startAgentSession = (initialPrompt: string, path: string, resumeSessionId?: string) => {
+    """Test 7: startAgentSession 接受 resumeSessionId 第三参数 (用于 resume)
+
+    注: hook 提取 (commit 22c98c9) 后, start 函数定义搬到 use-agent-session.ts:206
+    (const start = useCallback((initialPrompt, path, resumeSessionId?) => {...})),
+    page.tsx:66 只 destructure (start: startAgentSession) 出来用.
+    修复: 改读 hook 文件 + 改 regex 匹配 useCallback 定义.
+    """
+    content = read(APP_HOOK)
+    # 匹配: const start = useCallback((initialPrompt: string, path: string, resumeSessionId?: string) => {
     m = re.search(
-        r"startAgentSession\s*=\s*\(\s*initialPrompt:\s*string\s*,\s*path:\s*string\s*,\s*resumeSessionId\??:\s*string\s*\)",
+        r"const\s+start\s*=\s*useCallback\(\s*\(\s*initialPrompt:\s*string\s*,\s*path:\s*string\s*,\s*resumeSessionId\??:\s*string\s*\)",
         content,
     )
-    assert m, "startAgentSession 签名应接受 resumeSessionId?: string 第三参数"
+    assert m, "hook 里 start = useCallback(...) 签名应接受 resumeSessionId?: string 第三参数"
     # 验证 onopen 内根据 resumeSessionId 选 start vs resume
     onopen_block = re.search(
         r"socket\.onopen\s*=\s*\(\)\s*=>\s*\{[^}]*(?:resumeSessionId|type:\s*\"resume\"|type:\s*\"start\")",
@@ -211,9 +223,10 @@ def test_frontend_sidebar_open_triggers_refresh_sessions():
     修复: onClick 内 nextOpen=true 时 void refreshSessions().
     """
     content = read(APP_PAGE)
-    # 验证 onClick 内 nextOpen 判断 + refreshSessions 调用
+    # 验证 onToggleSidebar prop 内 nextOpen 判断 + refreshSessions 调用
+    # (page.tsx 用 prop 写法 onToggleSidebar={...}, ChatHeader 内部才用 onClick 包装)
     sidebar_open_block = re.search(
-        r"onClick\s*=\s*\{\s*\(\)\s*=>\s*\{[^}]*setSessionSidebarOpen[^}]*nextOpen[^}]*refreshSessions",
+        r"onToggleSidebar\s*=\s*\{\s*\(\)\s*=>\s*\{[^}]*setSessionSidebarOpen[^}]*nextOpen[^}]*refreshSessions",
         content,
     )
     assert sidebar_open_block, (
