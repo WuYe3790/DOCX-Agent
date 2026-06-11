@@ -419,6 +419,10 @@ async def list_workspace(session_id: str):
         try:
             stat = entry.stat()
             rel = entry.relative_to(workspace).as_posix()
+            # 过滤系统隐藏文件、macOS 元数据、缓存目录
+            parts = Path(rel).parts
+            if any(p.startswith(".") or p in ("__MACOSX", "__pycache__") for p in parts):
+                continue
             if rel.startswith(("unzipped/", "style_profiles/", "drafts/")):
                 continue
             files.append({

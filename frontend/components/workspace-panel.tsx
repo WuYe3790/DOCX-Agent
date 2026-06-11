@@ -226,7 +226,7 @@ export default function WorkspacePanel({
     return (
       <div
         key={node.path}
-        className={`group flex items-center gap-2.5 px-2 py-1.5 rounded transition-all ${
+        className={`group flex items-center gap-2.5 px-2 py-1.5 rounded transition-colors ${
           isActive
             ? "bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-200/50 dark:border-indigo-800/40"
             : "hover:bg-slate-100/70 dark:hover:bg-zinc-800/40 border border-transparent"
@@ -255,21 +255,29 @@ export default function WorkspacePanel({
             {node.name}
           </div>
         </div>
-        <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono shrink-0 select-none opacity-60 group-hover:opacity-0 group-hover:w-0 transition-all overflow-hidden">
-          {node.size !== undefined ? (node.size / 1024).toFixed(1) : 0} KB
+        
+        {/* 右侧操作/大小容器 (固定最小宽度以防止 hover 引起布局抖动) */}
+        <div className="relative shrink-0 select-none flex items-center justify-end min-w-[50px] h-5">
+          <span
+            className={`text-[10px] text-slate-400 dark:text-zinc-500 font-mono opacity-60 transition-opacity duration-150 ${
+              isConfirming ? "opacity-0 pointer-events-none" : "group-hover:opacity-0 group-hover:pointer-events-none"
+            }`}
+          >
+            {node.size !== undefined ? (node.size / 1024).toFixed(1) : 0} KB
+          </span>
+          <button
+            onClick={() => handleDeleteClick(node.name)}
+            className={`absolute right-0 p-1 rounded transition-all duration-150 flex items-center justify-center ${
+              isConfirming
+                ? "bg-rose-500 text-white hover:bg-rose-600 opacity-100 pointer-events-auto"
+                : "text-slate-400 dark:text-zinc-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 hover:text-rose-500 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto"
+            }`}
+            aria-label={isConfirming ? "再次点击确认删除" : "删除"}
+            title={isConfirming ? "再次点击确认删除" : "删除"}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
         </div>
-        <button
-          onClick={() => handleDeleteClick(node.name)}
-          className={`shrink-0 p-1 rounded transition-colors hidden group-hover:flex ${
-            isConfirming
-              ? "bg-rose-500 text-white hover:bg-rose-600"
-              : "text-slate-400 dark:text-zinc-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 hover:text-rose-500"
-          }`}
-          aria-label={isConfirming ? "再次点击确认删除" : "删除"}
-          title={isConfirming ? "再次点击确认删除" : "删除"}
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
       </div>
     );
   };
