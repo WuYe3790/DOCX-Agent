@@ -42,8 +42,8 @@ export function useAgentSession(opts: {
   // 用途: 商汤等 SSE 协议层有 bug 的 provider, 用户在 stalled 时切到非流式
   // 让下一轮 step() 走 create_chat_completion_blocking()
   // 状态: 由后端 stream_mode_changed 帧校正 (单 source of truth = 后端)
-  // 默认 True (流式) — 保持现有 live reasoning UX
-  const [streamMode, setStreamMode] = useState<boolean>(true);
+  // 默认 False (非流式) — 默认不走流式
+  const [streamMode, setStreamMode] = useState<boolean>(false);
 
   // === 实时流状态 (RAF 节流) ===
   const [liveReasoning, setLiveReasoning] = useState<string>("");
