@@ -31,8 +31,6 @@ except ModuleNotFoundError:
     from src.docx_compiler.markdown_parser import parse_markdown_blocks
     from src.docx_compiler.render import render_blocks_to_container
 
-from pathlib import Path
-
 from .common import read_markdown_text
 
 
@@ -85,8 +83,7 @@ def apply_markdown_ir_to_paragraph(
         return json_result({"status": "error", "message": "mode must be replace or after"})
 
     try:
-        session_dir = Path("out") / "sessions" / session_id
-        target, content = read_markdown_text(markdown_path, session_dir)
+        target, content = read_markdown_text(session_id, markdown_path)
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 

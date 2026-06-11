@@ -31,8 +31,6 @@ except ModuleNotFoundError:
     from src.docx_compiler.markdown_parser import parse_markdown_blocks
     from src.docx_compiler.render import render_blocks_to_container
 
-from pathlib import Path
-
 from .common import read_markdown_text
 
 
@@ -50,10 +48,9 @@ def apply_markdown_ir_to_table_cell(
     line_start: int | None = None,
     line_end: int | None = None,
 ) -> str:
-    """v2: 按模型提供的类型到 sample_id 映射，把 Markdown IR 写入 Word 表格单元格 (草稿从 session_dir/drafts/ 读)."""
+    """v2: 按模型提供的类型到 sample_id 映射, 把 Markdown IR 写入 Word 表格单元格 (草稿从 session_workspace/drafts/ 读)."""
     try:
-        session_dir = Path("out") / "sessions" / session_id
-        target, content = read_markdown_text(markdown_path, session_dir)
+        target, content = read_markdown_text(session_id, markdown_path)
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 

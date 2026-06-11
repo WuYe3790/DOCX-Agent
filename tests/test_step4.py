@@ -39,7 +39,7 @@ os.chdir(TMP_DIR)
 
 
 def test_write_markdown_draft_writes_to_session_sandbox():
-    """Test 1: write_markdown_draft(session_id, output_path, content) → 写到 session_dir/drafts/"""
+    """Test 1: write_markdown_draft(session_id, output_path, content) → 写到 session_workspace/drafts/"""
     session_id = "sess-write-1"
     result_json = write_markdown_draft(
         session_id=session_id,
@@ -49,22 +49,16 @@ def test_write_markdown_draft_writes_to_session_sandbox():
     result = json.loads(result_json)
     assert result["status"] == "ok", f"写失败: {result}"
 
-    # 验证文件写到 session_dir/drafts/
-    expected_dir = TMP_DIR / "out" / "sessions" / session_id / "drafts"
+    # v2: 文件写到 session_workspace/drafts/ (resolver 强制在 workspace 内)
+    expected_dir = TMP_DIR / "out" / "sessions" / session_id / "workspace" / "drafts"
     expected_path = expected_dir / "cover.md"
-    assert expected_path.exists(), f"草稿未写到 session_dir/drafts/: {expected_path}"
+    assert expected_path.exists(), f"草稿未写到 session_workspace/drafts/: {expected_path}"
     assert expected_path.read_text(encoding="utf-8") == "# 封面\n\n你好, 世界"
-    print("[OK] Test 1: write_markdown_draft → session_dir/drafts/cover.md")
+    print("[OK] Test 1: write_markdown_draft → session_workspace/drafts/cover.md")
 
 
 def test_privilege_escalation_blocked_by_dispatcher():
-    """Test 2: 越权防护 — dispatcher 用 self.session_id 覆盖 LLM 传的 session_id
-
-    模拟 LLM 幻觉瞎传 session_id=other-session, 工具仍写到 self.session_id 目录
-    (直接调 write_markdown_draft 时, caller 传的 session_id 就是真实 session_id —
-     这里测的是 dispatcher 覆盖逻辑在 agent.py 内的行为)
-    """
-    # 模拟 agent 内部 dispatcher 的行为: 先 parse args, 注入 self.session_id, 再 call
+    """Test 2: 越权防护 — dispatcher 用 self.session_id 覆盖 LLM 传的 session_id"""
     llm_args_str = json.dumps({
         "output_path": "evil.md",
         "content": "恶意内容",
@@ -72,19 +66,17 @@ def test_privilege_escalation_blocked_by_dispatcher():
     }, ensure_ascii=False)
     self_session_id = "sess-real-1"
 
-    # === 复现 agent.py dispatcher 逻辑 (避坑 1 核心) ===
     call_args_dict = json.loads(llm_args_str)
-    call_args_dict["session_id"] = self_session_id  # ← 用 self.session_id 覆盖
+    call_args_dict["session_id"] = self_session_id
     injected_args_str = json.dumps(call_args_dict, ensure_ascii=False)
 
-    # 调 call_tool
     result_json = call_tool("write_markdown_draft", injected_args_str)
     result = json.loads(result_json)
     assert result["status"] == "ok"
 
-    # 关键验证: 写到 self_session_id 目录, **不**写到 OTHER_SESSION_HACK
-    real_path = TMP_DIR / "out" / "sessions" / self_session_id / "drafts" / "evil.md"
-    hack_path = TMP_DIR / "out" / "sessions" / "OTHER_SESSION_HACK" / "drafts" / "evil.md"
+    # v2: 路径在 workspace/ 下
+    real_path = TMP_DIR / "out" / "sessions" / self_session_id / "workspace" / "drafts" / "evil.md"
+    hack_path = TMP_DIR / "out" / "sessions" / "OTHER_SESSION_HACK" / "workspace" / "drafts" / "evil.md"
     assert real_path.exists(), f"应写到 self session: {real_path}"
     assert not hack_path.exists(), f"越权写到 hack session: {hack_path}"
     # 整个 OTHER_SESSION_HACK 目录不应创建
@@ -93,30 +85,34 @@ def test_privilege_escalation_blocked_by_dispatcher():
 
 
 def test_draft_path_blocks_path_traversal():
-    """Test 3: draft_path 路径守卫 — 拒绝 ../etc/passwd 越界"""
-    session_id = "sess-traversal"
-    session_dir = TMP_DIR / "out" / "sessions" / session_id
-
-    # 越界尝试 1: 用 .. 跳出 drafts
+    """Test 3: draft_path 路径守卫 — 拒绝 ../etc/passwd 越界 (走 v2 resolver)"""
+    import workspace.guard as guard
+    # 重定向 WORKSPACE_ROOT 到 TMP_DIR
+    real_root = guard.WORKSPACE_ROOT
+    guard.WORKSPACE_ROOT = TMP_DIR
     try:
-        common.draft_path("../../../etc/passwd", session_dir)
-        assert False, "应抛 ValueError, 实际未抛"
-    except ValueError as exc:
-        assert "越界" in str(exc) or "只能在" in str(exc) or "不允许" in str(exc), f"意外错误消息: {exc}"
+        # 越界尝试 1: 用 .. 跳出 drafts
+        try:
+            common.draft_path("sess-traversal", "../../../etc/passwd")
+            assert False, "应抛 ValueError, 实际未抛"
+        except ValueError as exc:
+            assert "越界" in str(exc) or "不允许" in str(exc), f"意外错误消息: {exc}"
 
-    # 越界尝试 2: 绝对路径越界
-    try:
-        common.draft_path("/etc/passwd", session_dir)
-        assert False, "应抛 ValueError, 实际未抛"
-    except ValueError as exc:
-        assert "越界" in str(exc) or "只能在" in str(exc) or "不允许" in str(exc) or ".md" in str(exc), f"意外错误消息: {exc}"
+        # 越界尝试 2: 绝对路径越界
+        try:
+            common.draft_path("sess-traversal", "/etc/passwd")
+            assert False, "应抛 ValueError, 实际未抛"
+        except ValueError as exc:
+            assert "越界" in str(exc) or "只能在" in str(exc) or "不允许" in str(exc) or ".md" in str(exc), f"意外错误消息: {exc}"
 
-    # 越界尝试 3: 后缀不是 .md
-    try:
-        common.draft_path("cover.txt", session_dir)
-        assert False, "应抛 ValueError, 实际未抛"
-    except ValueError as exc:
-        assert ".md" in str(exc), f"意外错误消息: {exc}"
+        # 越界尝试 3: 后缀不是 .md
+        try:
+            common.draft_path("sess-traversal", "cover.txt")
+            assert False, "应抛 ValueError, 实际未抛"
+        except ValueError as exc:
+            assert ".md" in str(exc), f"意外错误消息: {exc}"
+    finally:
+        guard.WORKSPACE_ROOT = real_root
     print("[OK] Test 3: draft_path 拒绝 ../, /etc/, 非 .md 后缀 (3 种越界)")
 
 
@@ -209,8 +205,8 @@ def test_dispatcher_injects_session_id_for_session_tools():
     result = json.loads(result_json)
     assert result["status"] == "ok"
 
-    # 验证写到 self_session_id 目录
-    expected = TMP_DIR / "out" / "sessions" / self_session_id / "drafts" / "dispatched.md"
+    # 验证写到 self_session_id 目录 (v2: 在 workspace/drafts/ 下)
+    expected = TMP_DIR / "out" / "sessions" / self_session_id / "workspace" / "drafts" / "dispatched.md"
     assert expected.exists(), f"dispatcher 注入后应写到 self session: {expected}"
     print("[OK] Test 8: dispatcher 注入 session_id → call_tool 写到 self session 沙箱")
 

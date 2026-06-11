@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from .common import json_result, read_markdown_text
 
 
@@ -8,10 +6,9 @@ def read_markdown_draft(
     markdown_path: str,
     with_line_numbers: bool = True,
 ) -> str:
-    """v2: 读取 session_dir/drafts/ 下的 Markdown 草稿."""
+    """v2: 读取 session_workspace/drafts/ 下的 Markdown 草稿."""
     try:
-        session_dir = Path("out") / "sessions" / session_id
-        target, content = read_markdown_text(markdown_path, session_dir)
+        target, content = read_markdown_text(session_id, markdown_path)
     except (FileNotFoundError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc)})
 
