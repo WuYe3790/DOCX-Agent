@@ -28,6 +28,10 @@ SESSION_TOOLS = {
     "apply_markdown_ir_to_table_cell",
     "markdown_to_word",
     "analyze_docx_style_samples",
+    # v2: basic_tools 沙箱化 (Phase 3a)
+    "ls",
+    "read",
+    "analyze_image_content",
 }
 
 from openai import APITimeoutError, APIConnectionError, BadRequestError

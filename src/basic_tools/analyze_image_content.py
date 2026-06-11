@@ -1,25 +1,42 @@
 import json
 import os
+import sys
 import base64
 from pathlib import Path
+
+# v2: 沙箱化
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
 
 try:
     from llm_adapter import LLMClientAdapter
     from llm_adapter.registry import pick_capable_adapter
 except ImportError:
-    import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from llm_adapter import LLMClientAdapter
     from llm_adapter.registry import pick_capable_adapter
 
 
-def analyze_image_content(image_path: str, query: str = "分析图片内容") -> str:
-    """多模态图像内容识别工具：读取本地图片转为 base64，自适应切换至具备多模态识图能力的模型服务（如 SenseNova）进行视觉分析。"""
-    img_file = Path(image_path)
-    if not img_file.exists():
+# 10MB cap 与 read.py 对齐
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def analyze_image_content(session_id: str, image_path: str, query: str = "分析图片内容") -> str:
+    """v2: 多模态图像内容识别 — 路径走沙箱校验, 限制 10MB"""
+    try:
+        img_file = resolve_workspace_path(session_id, image_path, must_exist=True, must_be_file=True)
+    except WorkspacePathError as e:
         return json.dumps({
             "status": "error",
-            "message": f"image_path not found: '{image_path}'"
+            "code": e.code,
+            "message": e.user_message,
+        }, ensure_ascii=False, indent=2)
+
+    # 10MB 上限 (与 read 一致)
+    if img_file.stat().st_size > MAX_IMAGE_BYTES:
+        return json.dumps({
+            "status": "error",
+            "message": f"图片过大 ({img_file.stat().st_size} > {MAX_IMAGE_BYTES})",
         }, ensure_ascii=False, indent=2)
 
     try:
@@ -45,8 +62,6 @@ def analyze_image_content(image_path: str, query: str = "分析图片内容") ->
 
     try:
         adapter = LLMClientAdapter()
-        # Step 2: 用 capability-driven 工厂选 vision-capable provider
-        # — 替代旧 {"sensenova","openai","gemini"} 硬编码白名单 + os.environ mutation
         vision_adapter = pick_capable_adapter(adapter, "vision")
         if vision_adapter is None:
             return json.dumps({
@@ -91,17 +106,17 @@ tools_schema = {
     "type": "function",
     "function": {
         "name": "analyze_image_content",
-        "description": "多模态图像识别与理解基础工具。传入本地图片路径和相关查询问题，返回模型对该图片视觉内容的分析和理解文本。",
+        "description": "多模态图像识别与理解工具。传入 session workspace 内的图片路径和相关查询, 返回模型对该图片视觉内容的分析。",
         "parameters": {
             "type": "object",
             "properties": {
                 "image_path": {
                     "type": "string",
-                    "description": "待分析的本地图片文件路径（如：文档格式测试/cases/insert_image_007/test_chart.png）"
+                    "description": "待分析图片路径 (相对 workspace 根)"
                 },
                 "query": {
                     "type": "string",
-                    "description": "对图片内容的具体提问或分析指令，例如：'分析图片中的图表曲线走势与数值'，默认为：'分析图片内容'"
+                    "description": "对图片内容的具体提问或分析指令, 默认为 '分析图片内容'"
                 }
             },
             "required": ["image_path"]

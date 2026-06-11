@@ -1,5 +1,10 @@
 import json
+import sys
 from pathlib import Path
+
+# v2: 沙箱化
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
 DEFAULT_LIMIT = 2000
@@ -14,14 +19,14 @@ BOM_MAP = {
 FALLBACK_ENCODINGS = ["utf-8", "gbk"]
 
 
-def _detect_encoding(raw: bytes) -> tuple[str, str]:
+def _detect_encoding(raw: bytes) -> tuple:
     for bom_bytes, encoding in BOM_MAP.items():
         if raw.startswith(bom_bytes):
             return encoding, raw[len(bom_bytes):]
     return None, raw
 
 
-def _decode_content(raw: bytes) -> tuple[str, str]:
+def _decode_content(raw: bytes) -> tuple:
     encoding, payload = _detect_encoding(raw)
     if encoding:
         try:
@@ -38,17 +43,13 @@ def _decode_content(raw: bytes) -> tuple[str, str]:
     return payload.decode("utf-8", errors="replace"), "utf-8(replace)"
 
 
-def read(file_path: str, offset: int = 0, limit: int = -1) -> str:
-    p = Path(file_path)
-    if not p.exists():
+def read(session_id: str, file_path: str, offset: int = 0, limit: int = -1) -> str:
+    """v2: 读 session workspace 内的文件, 路径走沙箱校验"""
+    try:
+        p = resolve_workspace_path(session_id, file_path, must_exist=True, must_be_file=True)
+    except WorkspacePathError as e:
         return json.dumps(
-            {"status": "error", "message": f"File not found: {file_path}"},
-            ensure_ascii=False, indent=2,
-        )
-
-    if not p.is_file():
-        return json.dumps(
-            {"status": "error", "message": f"Path is not a file: {file_path}"},
+            {"status": "error", "code": e.code, "message": e.user_message},
             ensure_ascii=False, indent=2,
         )
 
@@ -120,21 +121,21 @@ tools_schema = {
     "type": "function",
     "function": {
         "name": "read",
-        "description": "读取本地文本、代码或 Markdown 文件内容。支持 offset/limit 分段读取以处理大文件。",
+        "description": "读取 session workspace 内的文本/Markdown 文件。路径相对 workspace 根, 不允许越界。",
         "parameters": {
             "type": "object",
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "要读取的文件路径",
+                    "description": "要读取的文件路径 (相对 workspace 根)",
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "从第几行开始读取（0 表示第一行），默认 0",
+                    "description": "从第几行开始读取 (0 表示第一行), 默认 0",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "最多读取行数，默认 -1 表示自动截断（上限 2000 行）",
+                    "description": "最多读取行数, 默认 -1 表示自动截断 (上限 2000 行)",
                 },
             },
             "required": ["file_path"],

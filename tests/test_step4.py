@@ -216,13 +216,13 @@ def test_dispatcher_injects_session_id_for_session_tools():
 
 
 def test_dispatcher_skips_non_session_tools():
-    """Test 9: 非 SESSION_TOOLS 工具 (ls) 不被注入 session_id (验证白名单精确)"""
-    # ls 工具的函数签名不接受 session_id — 如果硬塞会抛 TypeError
-    # 复现 dispatcher 行为: 不在 SESSION_TOOLS → 不注入
-    name = "ls"
-    assert name not in agent.SESSION_TOOLS, "ls 不应在 SESSION_TOOLS 集合中"
-    # 即使 LLM 传了 session_id, dispatcher 也不该管 (让 ls 报错即可 — 这是设计上无副作用的)
-    print("[OK] Test 9: 非 SESSION_TOOLS (ls) 不被 dispatcher 注入 session_id")
+    """Test 9: 非 SESSION_TOOLS 工具 (set_text_format) 不被注入 session_id (验证白名单精确)"""
+    # set_text_format 是 docx 写入工具, 尚未沙箱化, 不在 SESSION_TOOLS
+    # 用它验证 dispatcher 不会乱注入
+    name = "set_text_format"
+    assert name not in agent.SESSION_TOOLS, f"{name} 不应在 SESSION_TOOLS 集合中 (尚未沙箱化)"
+    # 即使 LLM 传了 session_id, dispatcher 也不该管
+    print("[OK] Test 9: 非 SESSION_TOOLS (set_text_format) 不被 dispatcher 注入 session_id")
 
 
 def test_markdown_to_word_accepts_session_id():
