@@ -103,21 +103,21 @@ export default function ChatHeader({
           {streamMode ? "流式" : "非流式"}
         </button>
 
-        {/* v2 (Phase 4): 文件工作区切换按钮 — 上传 docx / 选 active / 删 */}
-        {currentSessionId && (
-          <button
-            onClick={onToggleWorkspace}
-            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold border rounded transition-colors cursor-pointer ${
-              showWorkspace
-                ? "border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
-                : "border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
-            }`}
-            title="上传/管理文件"
-          >
-            <FolderUp className="w-3.5 h-3.5" />
-            文件 {workspaceFileCount > 0 && `(${workspaceFileCount})`}
-          </button>
-        )}
+        {/* v2 (Phase 4 + 修复): 文件工作区切换按钮 — 始终可见
+            无 session 时点按钮会先触发 onToggleWorkspace 内部逻辑建空 session
+            (见 page.tsx onToggleWorkspace handler) */}
+        <button
+          onClick={onToggleWorkspace}
+          className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold border rounded transition-colors cursor-pointer ${
+            showWorkspace
+              ? "border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
+              : "border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
+          }`}
+          title="上传/管理文件"
+        >
+          <FolderUp className="w-3.5 h-3.5" />
+          文件 {workspaceFileCount > 0 && `(${workspaceFileCount})`}
+        </button>
 
         {hasDraftFiles && (
           <button

@@ -380,7 +380,13 @@ export default function Home() {
           }
           setShowPreview((v) => !v);
         }}
-        onToggleWorkspace={() => setShowWorkspace((v) => !v)}
+        onToggleWorkspace={() => {
+          // 无 session 时先建空 session (前端不立即发消息), 让用户能上传文件
+          if (!currentSessionId) {
+            handleCreateSession();
+          }
+          setShowWorkspace((v) => !v);
+        }}
         onResetWorkspace={handleCreateSession}
         onToggleStreamMode={() => sendSetStreamMode(!streamMode)}
       />
