@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -112,6 +113,119 @@ def _check_magic_bytes(extension: str, head_bytes: bytes) -> None:
             )
 
 
+# === zip 流式解压 (Phase 2b) ===
+
+# 单 entry 压缩比上限: 防止 42.zip 风格炸弹 (典型比例 10000+:1)
+_ZIP_ENTRY_MAX_RATIO = 100
+# zip 内允许的 entry 数上限 (防 DOS via 大量小文件)
+_ZIP_MAX_ENTRIES = 10000
+
+
+def _extract_zip_streaming(
+    zip_path: Path,
+    target_dir: Path,
+    workspace: Path,
+) -> List[dict]:
+    """流式解压 zip 到 target_dir
+
+    Args:
+        zip_path: zip 文件绝对路径
+        target_dir: 解压目标 (workspace 子目录, 已 mkdir)
+        workspace: workspace 根 (用于 quota 检查)
+
+    Returns:
+        解压出的文件元信息列表 [{name, path, size}, ...]
+
+    Raises:
+        HTTPException(400 zip_slip / 400 zip_bomb / 507 quota_exceeded)
+    """
+    extracted = []
+    decompressed_so_far = 0
+    current_workspace_size = _workspace_size_bytes(workspace)  # 不含 target_dir
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            entries = zf.infolist()
+            if len(entries) > _ZIP_MAX_ENTRIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"zip 包含过多 entry ({len(entries)} > {_ZIP_MAX_ENTRIES})",
+                )
+
+            for entry in entries:
+                # 1) zip slip 检查: 拒绝 .. 段 / 绝对路径 / Windows 盘符
+                entry_path = Path(entry.filename)
+                if entry_path.is_absolute() or any(part == ".." for part in entry_path.parts):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"zip slip 检测: 非法 entry {entry.filename!r}",
+                    )
+                if entry.filename.startswith("\\"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"zip slip 检测 (UNC): 非法 entry {entry.filename!r}",
+                    )
+
+                # 2) zip bomb 检查: 单 entry 压缩比 > 100
+                if entry.compress_size > 0:
+                    ratio = entry.file_size / entry.compress_size
+                    if ratio > _ZIP_ENTRY_MAX_RATIO:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"zip bomb 检测: {entry.filename!r} 压缩比 {ratio:.0f}:1 超过 {_ZIP_ENTRY_MAX_RATIO}:1",
+                        )
+
+                # 3) 累加解压后大小 + quota 检查
+                decompressed_so_far += entry.file_size
+                if current_workspace_size + decompressed_so_far > QUOTA_BYTES:
+                    raise HTTPException(
+                        status_code=507,
+                        detail=f"解压后超过 session quota: {current_workspace_size + decompressed_so_far} > {QUOTA_BYTES}",
+                    )
+
+                # 4) 流式解压 (不调 extractall!)
+                #    直接路径 = target_dir / entry.filename
+                #    entry_path 是相对路径, target_dir 已在 workspace 内,
+                #    is_relative_to 防御 (defense in depth) — 再次确认不越界
+                out_path = (target_dir / entry.filename).resolve()
+                if not out_path.is_relative_to(target_dir.resolve()):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"entry 解析后越界: {entry.filename!r}",
+                    )
+
+                if entry.is_dir():
+                    out_path.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                # 确保父目录存在
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                # 流式写 (用 zf.open + shutil.copyfileobj, 不一次性 load)
+                with zf.open(entry) as src, open(out_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+                extracted.append({
+                    "name": out_path.name,
+                    "path": out_path.relative_to(workspace).as_posix(),
+                    "size": out_path.stat().st_size,
+                })
+    except HTTPException:
+        # 失败回滚: 删掉 target_dir (含已解压的部分内容)
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+    except zipfile.BadZipFile as e:
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"zip 文件损坏: {e}")
+    except Exception as e:
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"解压失败: {e}")
+
+    return extracted
+
+
 # === POST /upload ===
 
 @router.post("/{session_id}/upload", status_code=201)
@@ -183,21 +297,41 @@ async def upload_to_workspace(session_id: str, files: List[UploadFile] = File(..
                     real_head = f.read(_MAGIC_CHECK_BYTES)
                 _check_magic_bytes(ext, real_head)
 
-                # 5) 原子改名到目标 (unique_workspace_target 处理重名)
-                target = unique_workspace_target(workspace, clean_name)
-                # 用 shutil.move 而不是 os.replace, 因为 tmp 和 target 可能在不同盘
-                # (Windows: 跨盘 os.replace 会失败)
-                shutil.move(str(tmp_path), str(target))
-                tmp_path = None  # move 成功, 标记为不再清理
-                uploaded_files.append((target, total_written))
+                # 5) .zip 走流式解压通道, 其他格式走原样保存
+                if ext == ".zip":
+                    # zip_stem = 文件名去掉 .zip 后缀
+                    zip_stem = clean_name[:-len(".zip")]
+                    # 子目录用 unique_workspace_target 重名防覆盖
+                    target_subdir = unique_workspace_target(workspace, zip_stem)
+                    target_subdir.mkdir(parents=True, exist_ok=False)
+                    extracted = _extract_zip_streaming(tmp_path, target_subdir, workspace)
+                    # zip 文件本身不保留 (只保留解压内容)
+                    tmp_path.unlink(missing_ok=True)
+                    tmp_path = None
+                    now = datetime.now().isoformat(timespec="seconds")
+                    for f_meta in extracted:
+                        uploaded_results.append({
+                            "filename": f_meta["name"],
+                            "path": f_meta["path"],
+                            "size": f_meta["size"],
+                            "uploaded_at": now,
+                            "extracted_from": clean_name,  # 每个 entry 都标记来源 zip
+                        })
+                else:
+                    # 原样保存 (非 zip)
+                    target = unique_workspace_target(workspace, clean_name)
+                    # 用 shutil.move 而不是 os.replace, 因为 tmp 和 target 可能在不同盘
+                    shutil.move(str(tmp_path), str(target))
+                    tmp_path = None  # move 成功, 标记为不再清理
+                    uploaded_files.append((target, total_written))
 
-                stat = target.stat()
-                uploaded_results.append({
-                    "filename": target.name,
-                    "path": target.name,  # 相对 workspace
-                    "size": stat.st_size,
-                    "uploaded_at": datetime.now().isoformat(timespec="seconds"),
-                })
+                    stat = target.stat()
+                    uploaded_results.append({
+                        "filename": target.name,
+                        "path": target.name,  # 相对 workspace
+                        "size": stat.st_size,
+                        "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+                    })
             except HTTPException:
                 if tmp_path and tmp_path.exists():
                     tmp_path.unlink(missing_ok=True)
