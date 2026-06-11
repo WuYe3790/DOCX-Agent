@@ -151,12 +151,12 @@ export default function WorkspacePanel({
   );
 
   const handleDeleteClick = useCallback(
-    (name: string) => {
-      if (confirmDelete === name) {
+    (path: string) => {
+      if (confirmDelete === path) {
         setConfirmDelete(null);
-        void onDelete(name);
+        void onDelete(path);
       } else {
-        setConfirmDelete(name);
+        setConfirmDelete(path);
         setTimeout(() => setConfirmDelete(null), 5000);
       }
     },
@@ -220,7 +220,7 @@ export default function WorkspacePanel({
 
     // 文件行
     const isActive = activeDocxName === node.name;
-    const isConfirming = confirmDelete === node.name;
+    const isConfirming = confirmDelete === node.path;
     const isDocx = node.name.toLowerCase().endsWith(".docx");
 
     return (
@@ -266,7 +266,7 @@ export default function WorkspacePanel({
             {node.size !== undefined ? (node.size / 1024).toFixed(1) : 0} KB
           </span>
           <button
-            onClick={() => handleDeleteClick(node.name)}
+            onClick={() => handleDeleteClick(node.path)}
             className={`absolute right-0 p-1 rounded transition-all duration-150 flex items-center justify-center ${
               isConfirming
                 ? "bg-rose-500 text-white hover:bg-rose-600 opacity-100 pointer-events-auto"

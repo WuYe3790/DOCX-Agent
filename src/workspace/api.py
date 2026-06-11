@@ -443,7 +443,7 @@ async def list_workspace(session_id: str):
 
 # === DELETE /workspace/{filename} ===
 
-@router.delete("/{session_id}/workspace/{filename}", status_code=204)
+@router.delete("/{session_id}/workspace/{filename:path}", status_code=204)
 async def delete_workspace_file(session_id: str, filename: str):
     """删除 workspace 内单个文件"""
     if not _upload_enabled():
@@ -453,29 +453,29 @@ async def delete_workspace_file(session_id: str, filename: str):
         raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
 
     try:
-        clean_name = safe_workspace_filename(filename)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"非法文件名: {e.user_message if hasattr(e, 'user_message') else str(e)}")
-
-    workspace = workspace_dir(session_id)
-    target = workspace / clean_name
-    # 防越界: 解析后必须在 workspace 内
-    try:
-        target_resolved = target.resolve()
-        workspace_resolved = workspace.resolve()
-        if not target_resolved.is_relative_to(workspace_resolved):
-            raise HTTPException(status_code=400, detail="路径越界")
-    except HTTPException:
-        raise
+        # 使用统一的安全路径解析器 (防 traversal, 绝对/相对路径越界，支持子目录文件/文件夹)
+        target = guard.resolve_workspace_path(
+            session_id,
+            filename,
+            must_exist=True,
+            allow_symlinks=False,
+        )
+    except guard.WorkspacePathError as e:
+        if e.code == "not_found":
+            raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"路径解析失败: {e}")
 
-    if not target.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {clean_name}")
-    if not target.is_file():
-        raise HTTPException(status_code=400, detail=f"不是文件: {clean_name}")
-    target.unlink()
-    return None  # 204
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
+
+    return None
 
 
 # === POST /workspace/clear ===
