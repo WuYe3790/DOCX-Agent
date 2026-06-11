@@ -211,13 +211,13 @@ def test_dispatcher_injects_session_id_for_session_tools():
 
 
 def test_dispatcher_skips_non_session_tools():
-    """Test 9: 非 SESSION_TOOLS 工具 (set_text_format) 不被注入 session_id (验证白名单精确)"""
-    # set_text_format 是 docx 写入工具, 尚未沙箱化, 不在 SESSION_TOOLS
+    """Test 9: 非 SESSION_TOOLS 工具 (bind_styles_to_roles) 不被注入 session_id (验证白名单精确)"""
+    # bind_styles_to_roles 是 style profile 工具, 尚未沙箱化, 不在 SESSION_TOOLS
     # 用它验证 dispatcher 不会乱注入
-    name = "set_text_format"
+    name = "bind_styles_to_roles"
     assert name not in agent.SESSION_TOOLS, f"{name} 不应在 SESSION_TOOLS 集合中 (尚未沙箱化)"
     # 即使 LLM 传了 session_id, dispatcher 也不该管
-    print("[OK] Test 9: 非 SESSION_TOOLS (set_text_format) 不被 dispatcher 注入 session_id")
+    print("[OK] Test 9: 非 SESSION_TOOLS (bind_styles_to_roles) 不被 dispatcher 注入 session_id")
 
 
 def test_markdown_to_word_accepts_session_id():

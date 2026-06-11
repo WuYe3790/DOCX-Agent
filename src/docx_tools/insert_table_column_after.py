@@ -1,9 +1,11 @@
 from docx_compiler.table_ops import insert_table_column_after_op
 
-from .common import json_result
+from .common import json_result, resolve_docx_io
+
 
 
 def insert_table_column_after(
+    session_id: str,
     docx_path: str,
     output_path: str,
     table_index: int,
@@ -12,6 +14,7 @@ def insert_table_column_after(
     copy_from: str = "left",
 ) -> str:
     """在指定列右侧插入新列。"""
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     try:
         result = insert_table_column_after_op(
             docx_path=docx_path,
@@ -34,8 +37,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "table_index": {"type": "integer", "description": "第几个表格，按 //w:tbl 计数，1-based；注意嵌套表格也会计数"},
                 "column_index": {"type": "integer", "description": "在哪一列右侧插入，1-based"},
                 "cell_texts": {

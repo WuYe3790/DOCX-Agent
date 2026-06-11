@@ -14,10 +14,12 @@ from .common import (
     split_text_for_paragraphs,
     tables,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def insert_text_in_table_cell(
+    session_id: str,
     docx_path: str,
     output_path: str,
     table_index: int,
@@ -34,7 +36,8 @@ def insert_text_in_table_cell(
     font_size_pt: float | None = None,
 ) -> str:
     """向表格单元格插入文本。表格、行、单元格索引都从 1 开始计数。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     all_tables = tables(root)
     if table_index < 1 or table_index > len(all_tables):
         return json_result({"status": "error", "message": "table_index out of range", "table_count": len(all_tables)})
@@ -109,12 +112,12 @@ def insert_text_in_table_cell(
                 font_size_pt=font_size_pt,
             )
 
-    write_document_xml(docx_path, output_path, root)
+    write_document_xml(str(input_path), str(output_path_resolved), root)
     return json_result(
         {
             "status": "ok",
-            "docx_path": docx_path,
-            "output_path": output_path,
+            "docx_path": str(input_path),
+            "output_path": str(output_path_resolved),
             "table_index": table_index,
             "row_index": row_index,
             "cell_index": cell_index,
@@ -137,8 +140,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "table_index": {"type": "integer", "description": "第几个表格，按 //w:tbl 计数，1-based"},
                 "row_index": {"type": "integer", "description": "第几行，1-based"},
                 "cell_index": {"type": "integer", "description": "第几个单元格，1-based"},

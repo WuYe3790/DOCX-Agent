@@ -9,12 +9,14 @@ from .common import (
     replace_text_range_in_paragraph,
     split_text_for_paragraphs,
     write_document_xml,
+    resolve_docx_io,
 )
 from .replace_text import _following_paragraphs, _insert_extra_paragraphs
 from .style_profile import load_style_sample
 
 
 def replace_text_like_sample(
+    session_id: str,
     docx_path: str,
     output_path: str,
     old_text: str,
@@ -25,8 +27,9 @@ def replace_text_like_sample(
     newline_mode: str = "paragraphs",
 ) -> str:
     """替换文本，并把新文本格式设置为指定样式样本。"""
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     style_sample = load_style_sample(style_profile_path, sample_id)
-    root = load_document_xml(docx_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -54,12 +57,12 @@ def replace_text_like_sample(
                     apply_sample_format_to_paragraph(inserted, style_sample)
             after_text = paragraph_text(paragraph)
             change_for_result = {key: value for key, value in change.items() if key != "run"}
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "old_text": old_text,
                     "new_text": new_text,
                     "sample_id": sample_id,
@@ -73,7 +76,7 @@ def replace_text_like_sample(
                 }
             )
 
-    return json_result({"status": "not_found", "docx_path": docx_path, "old_text": old_text, "occurrence": occurrence})
+    return json_result({"status": "not_found", "docx_path": str(input_path), "old_text": old_text, "occurrence": occurrence})
 
 
 tools_schema = {
@@ -84,8 +87,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "old_text": {"type": "string", "description": "要替换的原文本"},
                 "new_text": {"type": "string", "description": "替换后的新文本"},
                 "style_profile_path": {"type": "string", "description": "analyze_docx_style_samples 输出的样式画像 JSON 路径"},

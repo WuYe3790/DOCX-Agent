@@ -17,10 +17,12 @@ from .common import (
     table_rows,
     table_summary,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def insert_table_row_after(
+    session_id: str,
     docx_path: str,
     output_path: str,
     table_index: int,
@@ -35,7 +37,8 @@ def insert_table_row_after(
     font_size_pt: float | None = None,
 ) -> str:
     """在指定表格行后插入一整行，复制邻近行结构后写入各单元格文本。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     try:
         table = get_table_by_index(root, table_index)
         target_row = get_row_by_index(table, row_index)
@@ -56,13 +59,13 @@ def insert_table_row_after(
         font_size_pt=font_size_pt,
     )
     target_row.addnext(new_row)
-    write_document_xml(docx_path, output_path, root)
+    write_document_xml(str(input_path), str(output_path_resolved), root)
 
     return json_result(
         {
             "status": "ok",
-            "docx_path": docx_path,
-            "output_path": output_path,
+            "docx_path": str(input_path),
+            "output_path": str(output_path_resolved),
             "table_index": table_index,
             "inserted_after_row_index": row_index,
             "inserted_row_index": row_index + 1,
@@ -148,8 +151,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "table_index": {"type": "integer", "description": "第几个表格，按 //w:tbl 计数，1-based；注意嵌套表格也会计数"},
                 "row_index": {"type": "integer", "description": "在哪一行后面插入，1-based"},
                 "cell_texts": {

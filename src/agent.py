@@ -36,6 +36,26 @@ SESSION_TOOLS = {
     "read_docx_structure",
     "find_text",
     "diff_docx",
+    # v2: docx_tools 写入类沙箱化 (Phase 3d) — 19 个
+    "insert_text_at",
+    "insert_text_in_table_cell",
+    "insert_table_row_after",
+    "set_paragraph_indent",
+    "insert_table_after_paragraph",
+    "insert_table_in_cell",
+    "insert_table_column_after",
+    "merge_table_cells_horizontal",
+    "clear_table_cell",
+    "delete_table_row",
+    "replace_table_cell_text",
+    "replace_text",
+    "delete_text",
+    "insert_paragraph_after",
+    "set_text_format",
+    "replace_text_like_sample",
+    "insert_paragraph_after_like_sample",
+    "replace_table_cell_like_sample",
+    "insert_image_after_paragraph",
 }
 
 from openai import APITimeoutError, APIConnectionError, BadRequestError

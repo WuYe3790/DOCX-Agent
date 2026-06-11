@@ -1,9 +1,11 @@
 from docx_compiler.table_ops import set_paragraph_indent_op
 
-from .common import json_result
+from .common import json_result, resolve_docx_io
+
 
 
 def set_paragraph_indent(
+    session_id: str,
     docx_path: str,
     output_path: str,
     paragraph_index: int,
@@ -12,6 +14,7 @@ def set_paragraph_indent(
     hanging_twips: int | None = None,
 ) -> str:
     """设置指定段落的左缩进、首行缩进或悬挂缩进。"""
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     try:
         result = set_paragraph_indent_op(
             docx_path=docx_path,
@@ -34,8 +37,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "paragraph_index": {"type": "integer", "description": "第几个段落，按 //w:p 计数，1-based"},
                 "left_twips": {"type": "integer", "description": "左缩进，单位 twips；720 表示 0.5 英寸"},
                 "first_line_twips": {"type": "integer", "description": "首行缩进，单位 twips"},

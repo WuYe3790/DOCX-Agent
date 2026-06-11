@@ -10,12 +10,14 @@ from .common import (
     split_text_for_paragraphs,
     W,
     write_document_xml,
+    resolve_docx_io,
 )
 from .insert_paragraph_after import _select_style_paragraph
 from .style_profile import load_style_sample
 
 
 def insert_paragraph_after_like_sample(
+    session_id: str,
     docx_path: str,
     output_path: str,
     anchor_text: str,
@@ -27,8 +29,9 @@ def insert_paragraph_after_like_sample(
     newline_mode: str = "paragraphs",
 ) -> str:
     """在锚点段落后插入新段落，并按指定样式样本设置格式。"""
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     style_sample = load_style_sample(style_profile_path, sample_id)
-    root = load_document_xml(docx_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -59,12 +62,12 @@ def insert_paragraph_after_like_sample(
                 current = current.getnext()
                 if current is not None:
                     apply_sample_format_to_paragraph(current, style_sample)
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "anchor_text": anchor_text,
                     "new_text": new_text,
                     "sample_id": sample_id,
@@ -75,7 +78,7 @@ def insert_paragraph_after_like_sample(
                 }
             )
 
-    return json_result({"status": "not_found", "docx_path": docx_path, "anchor_text": anchor_text, "occurrence": occurrence})
+    return json_result({"status": "not_found", "docx_path": str(input_path), "anchor_text": anchor_text, "occurrence": occurrence})
 
 
 def _empty_paragraph_like(paragraph):
@@ -92,8 +95,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "anchor_text": {"type": "string", "description": "用于定位段落的文本"},
                 "new_text": {"type": "string", "description": "新增段落文本"},
                 "style_profile_path": {"type": "string", "description": "analyze_docx_style_samples 输出的样式画像 JSON 路径"},

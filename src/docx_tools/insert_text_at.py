@@ -14,10 +14,12 @@ from .common import (
     split_text_for_paragraphs,
     insert_paragraphs_after,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def insert_text_at(
+    session_id: str,
     docx_path: str,
     output_path: str,
     anchor_text: str,
@@ -38,7 +40,8 @@ def insert_text_at(
     使用 -1 表示插入到 anchor_text 后面。
     occurrence 是全文第几个匹配项，从 1 开始计数。
     """
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -85,12 +88,12 @@ def insert_text_at(
                         font_size_pt=font_size_pt,
                     )
             change_for_result = {key: value for key, value in change.items() if key != "run"}
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "paragraph_index": paragraph_index,
                     "location": paragraph_location(paragraph),
                     "anchor_text": anchor_text,
@@ -107,7 +110,7 @@ def insert_text_at(
     return json_result(
         {
             "status": "not_found",
-            "docx_path": docx_path,
+            "docx_path": str(input_path),
             "anchor_text": anchor_text,
             "occurrence": occurrence,
         }
@@ -169,8 +172,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "anchor_text": {"type": "string", "description": "用于定位的原文"},
                 "insert_text": {"type": "string", "description": "要插入的文本"},
                 "offset": {

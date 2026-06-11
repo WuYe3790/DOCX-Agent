@@ -10,10 +10,12 @@ from .common import (
     replace_text_range_in_paragraph,
     split_text_for_paragraphs,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def replace_text(
+    session_id: str,
     docx_path: str,
     output_path: str,
     old_text: str,
@@ -27,7 +29,8 @@ def replace_text(
     font_size_pt: float | None = None,
 ) -> str:
     """按逻辑段落文本替换内容，支持跨 run 命中。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -68,12 +71,12 @@ def replace_text(
                     )
             after_text = paragraph_text(paragraph)
             change_for_result = {key: value for key, value in change.items() if key != "run"}
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "paragraph_index": paragraph_index,
                     "location": paragraph_location(paragraph),
                     "old_text": old_text,
@@ -91,7 +94,7 @@ def replace_text(
     return json_result(
         {
             "status": "not_found",
-            "docx_path": docx_path,
+            "docx_path": str(input_path),
             "old_text": old_text,
             "occurrence": occurrence,
         }
@@ -133,8 +136,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "old_text": {"type": "string", "description": "要替换的原文本"},
                 "new_text": {"type": "string", "description": "替换后的新文本"},
                 "occurrence": {"type": "integer", "description": "第几个匹配项，1-based，默认 1"},

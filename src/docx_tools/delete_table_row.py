@@ -7,10 +7,12 @@ from .common import (
     table_rows,
     table_summary,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def delete_table_row(
+    session_id: str,
     docx_path: str,
     output_path: str,
     table_index: int,
@@ -18,7 +20,8 @@ def delete_table_row(
     expected_row_text_contains: str = "",
 ) -> str:
     """删除指定表格整行。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     try:
         table = get_table_by_index(root, table_index)
         row = get_row_by_index(table, row_index)
@@ -41,13 +44,13 @@ def delete_table_row(
         )
 
     table.remove(row)
-    write_document_xml(docx_path, output_path, root)
+    write_document_xml(str(input_path), str(output_path_resolved), root)
 
     return json_result(
         {
             "status": "ok",
-            "docx_path": docx_path,
-            "output_path": output_path,
+            "docx_path": str(input_path),
+            "output_path": str(output_path_resolved),
             "table_index": table_index,
             "deleted_row_index": row_index,
             "deleted_row_text": before_text,
@@ -67,8 +70,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "table_index": {"type": "integer", "description": "第几个表格，按 //w:tbl 计数，1-based；注意嵌套表格也会计数"},
                 "row_index": {"type": "integer", "description": "第几行，1-based"},
                 "expected_row_text_contains": {

@@ -6,10 +6,12 @@ from .common import (
     paragraphs,
     replace_text_range_in_paragraph,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def delete_text(
+    session_id: str,
     docx_path: str,
     output_path: str,
     target_text: str,
@@ -17,7 +19,8 @@ def delete_text(
     trim_surrounding_spaces: bool = False,
 ) -> str:
     """删除指定文本，支持跨 run 命中，删除后清理空文本 run。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -40,12 +43,12 @@ def delete_text(
             before_text = paragraph_text(paragraph)
             change = replace_text_range_in_paragraph(paragraph, delete_start, delete_end, "")
             after_text = paragraph_text(paragraph)
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "paragraph_index": paragraph_index,
                     "location": paragraph_location(paragraph),
                     "target_text": target_text,
@@ -61,7 +64,7 @@ def delete_text(
     return json_result(
         {
             "status": "not_found",
-            "docx_path": docx_path,
+            "docx_path": str(input_path),
             "target_text": target_text,
             "occurrence": occurrence,
         }
@@ -84,8 +87,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "target_text": {"type": "string", "description": "要删除的文本"},
                 "occurrence": {"type": "integer", "description": "第几个匹配项，1-based，默认 1"},
                 "trim_surrounding_spaces": {

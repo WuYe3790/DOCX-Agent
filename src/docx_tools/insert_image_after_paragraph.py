@@ -10,10 +10,12 @@ from .common import (
     paragraph_text,
     paragraphs,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def insert_image_after_paragraph(
+    session_id: str,
     docx_path: str,
     output_path: str,
     image_path: str,
@@ -23,7 +25,8 @@ def insert_image_after_paragraph(
     height_cm: float | None = None,
 ) -> str:
     """在指定的锚点段落（通过索引和文本双重校验定位）下方插入本地图片。"""
-    # 1. 校验本地图片文件是否存在
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+# 1. 校验本地图片文件是否存在
     img_file_path = Path(image_path)
     if not img_file_path.exists():
         return json_result(
@@ -63,7 +66,7 @@ def insert_image_after_paragraph(
             width_emu = int(height_emu * aspect_ratio)
 
     # 4. 解析并定位 Word XML 正文
-    root = load_document_xml(docx_path)
+    root = load_document_xml(str(input_path))
     paragraph_list = list(paragraphs(root))
 
     index = int(paragraph_index)
@@ -150,7 +153,7 @@ def insert_image_after_paragraph(
 
     # 6. 使用 write_document_xml 处理所有关系并写回 ZIP
     try:
-        write_document_xml(docx_path, output_path, root)
+        write_document_xml(str(input_path), str(output_path_resolved), root)
     except Exception as exc:
         return json_result(
             {
@@ -162,8 +165,8 @@ def insert_image_after_paragraph(
     return json_result(
         {
             "status": "ok",
-            "docx_path": docx_path,
-            "output_path": output_path,
+            "docx_path": str(input_path),
+            "output_path": str(output_path_resolved),
             "image_path": image_path,
             "paragraph_index": index,
             "anchor_text": anchor_text,
@@ -182,8 +185,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "image_path": {"type": "string", "description": "待插入的本地图片文件路径，如 out/media/chart.png"},
                 "paragraph_index": {"type": "integer", "description": "锚点段落的 1-based 索引"},
                 "anchor_text": {"type": "string", "description": "锚点段落预期包含的文本，用于双重校验"},

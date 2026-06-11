@@ -9,10 +9,12 @@ from .common import (
     paragraphs,
     split_text_for_paragraphs,
     write_document_xml,
+    resolve_docx_io,
 )
 
 
 def insert_paragraph_after(
+    session_id: str,
     docx_path: str,
     output_path: str,
     anchor_text: str,
@@ -27,7 +29,8 @@ def insert_paragraph_after(
     font_size_pt: float | None = None,
 ) -> str:
     """在包含锚点文本的段落后新增段落。"""
-    root = load_document_xml(docx_path)
+    input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+    root = load_document_xml(str(input_path))
     current_occurrence = 0
 
     for paragraph_index, paragraph in enumerate(paragraphs(root), start=1):
@@ -69,12 +72,12 @@ def insert_paragraph_after(
                         font_size_half_points=font_size_half_points,
                         font_size_pt=font_size_pt,
                     )
-            write_document_xml(docx_path, output_path, root)
+            write_document_xml(str(input_path), str(output_path_resolved), root)
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": docx_path,
-                    "output_path": output_path,
+                    "docx_path": str(input_path),
+                    "output_path": str(output_path_resolved),
                     "anchor_text": anchor_text,
                     "new_text": new_text,
                     "occurrence": occurrence,
@@ -91,7 +94,7 @@ def insert_paragraph_after(
     return json_result(
         {
             "status": "not_found",
-            "docx_path": docx_path,
+            "docx_path": str(input_path),
             "anchor_text": anchor_text,
             "occurrence": occurrence,
         }
@@ -127,8 +130,8 @@ tools_schema = {
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "输入 .docx 文件路径"},
-                "output_path": {"type": "string", "description": "输出 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "输入 .docx 文件路径 (相对 workspace 根)"},
+                "output_path": {"type": "string", "description": "输出 .docx 文件路径 (相对 workspace 根)"},
                 "anchor_text": {"type": "string", "description": "用于定位段落的文本"},
                 "new_text": {"type": "string", "description": "新增段落的文本"},
                 "occurrence": {"type": "integer", "description": "第几个匹配项，1-based，默认 1"},

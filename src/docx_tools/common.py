@@ -1,10 +1,14 @@
 import copy
 import hashlib
 import json
+import sys
 import zipfile
 from pathlib import Path
 
 from lxml import etree
+
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -16,6 +20,20 @@ XML = f"{{{XML_NS}}}"
 
 def json_result(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def resolve_docx_io(session_id: str, docx_path: str, output_path: str):
+    """v2: docx 工具统一解析输入/输出路径 (沙箱化)
+
+    Returns:
+        (input_path: Path, output_path: Path) — 都已 resolve, 在 workspace 内
+
+    Raises:
+        WorkspacePathError
+    """
+    input_path = resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)
+    output_path_resolved = resolve_workspace_path(session_id, output_path, must_exist=False)
+    return input_path, output_path_resolved
 
 
 def load_document_xml(docx_path: str):
