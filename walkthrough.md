@@ -195,3 +195,51 @@
 **回归**: 212 passed, 1 skipped
 
 ---
+
+## 阶段 3d: docx_tools 写入类沙箱化 (commit `edca4b1`, 19 工具)
+
+**做了什么**: 19 个 docx 写入工具加 `session_id` 注入 + resolver 沙箱化。
+
+**修改工具清单**:
+insert_text_at / insert_text_in_table_cell / insert_table_row_after /
+set_paragraph_indent / insert_table_after_paragraph /
+insert_table_in_cell / insert_table_column_after /
+merge_table_cells_horizontal / clear_table_cell / delete_table_row /
+replace_table_cell_text / replace_text / delete_text /
+insert_paragraph_after / set_text_format / replace_text_like_sample /
+insert_paragraph_after_like_sample / replace_table_cell_like_sample /
+insert_image_after_paragraph
+
+**实现方式**: 写了一个 batch 脚本 `scripts/sandbox_docx_writers.py` 用 regex 批量给每个工具加:
+1. `from .common` 导入 `resolve_docx_io`
+2. 函数签名加 `session_id: str` 作为第一参数
+3. 函数体顶部加 `input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)`
+4. 替换 `load_document_xml(docx_path)` → `load_document_xml(str(input_path))`
+5. 替换 `write_document_xml(docx_path, output_path, ...)` → `write_document_xml(str(input_path), str(output_path_resolved), ...)`
+6. json_result 中 `"docx_path": docx_path` → `"docx_path": str(input_path)`
+7. json_result 中 `"output_path": output_path` → `"output_path": str(output_path_resolved)`
+8. tools_schema 描述加 "(相对 workspace 根)"
+
+**SESSION_TOOLS 扩展**: 12 → 31 (19 写入类)
+
+**新公共 helper** (`src/docx_tools/common.py`):
+```python
+def resolve_docx_io(session_id: str, docx_path: str, output_path: str):
+    """v2: docx 工具统一解析输入/输出路径 (沙箱化)"""
+    input_path = resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)
+    output_path_resolved = resolve_workspace_path(session_id, output_path, must_exist=False)
+    return input_path, output_path_resolved
+```
+
+**实施中遇到的 bug 与修复**:
+- batch 脚本 regex 错位: `input_path = ...` 插入到 docstring 内 (8 缩进), `load_document_xml` 行缩进变 0
+- 写了 `scripts/fix_sandbox_indent.py` 第一轮修复 (修 8 缩进 → 4 缩进, root 行 0 → 4)
+- 发现 `style_sample = load_style_sample(...)` 这类 0 缩进行没被处理, 再写 `scripts/fix_sandbox_indent2.py` 第二轮修复 (修复其他 0 缩进的 body 行)
+- 最终 19 个文件全部修复
+
+**测试适配**:
+- `test_dispatcher_skips_non_session_tools` 改用 `bind_styles_to_roles` (style profile 工具, 未沙箱化) 做"非 session tool"测试样本 (Phase 3a 用 `set_text_format`, Phase 3c 改过, 这次再改)
+
+**回归**: 212 passed, 1 skipped
+
+---
