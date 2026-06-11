@@ -167,9 +167,16 @@ class TestUpload:
         assert resp.status_code == 507
         assert "quota" in resp.json()["detail"]
 
-    def test_upload_nonexistent_session_rejected(self, client):
+    def test_upload_nonexistent_session_auto_creates_session(self, client):
         resp = _upload_files(client, "session-ghost", [("a.txt", b"x")])
-        assert resp.status_code == 404
+        assert resp.status_code == 201
+        
+        # 验证会话目录和文件被正确创建
+        import workspace.guard as guard
+        session_dir = guard.WORKSPACE_ROOT / "session-ghost"
+        assert session_dir.exists()
+        assert (session_dir / "metadata.json").exists()
+        assert (session_dir / "messages.json").exists()
 
     def test_upload_dotdot_filename_rejected(self, client, fake_session):
         """.docx 不会触发 .. 段, 但 ../../etc/passwd 会过 safe_workspace_filename 失败"""

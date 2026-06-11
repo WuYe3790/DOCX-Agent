@@ -24,6 +24,11 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_ORIGIN}/api/sessions/:id/drafts`,
       },
       {
+        // v4 修复: 代理 session 相关的通配子路由（包括 workspace/upload、workspace/clear 等）
+        source: "/api/sessions/:id/:path*",
+        destination: `${BACKEND_ORIGIN}/api/sessions/:id/:path*`,
+      },
+      {
         source: "/api/style/analyze",
         destination: `${BACKEND_ORIGIN}/api/style/analyze`,
       },

@@ -69,6 +69,7 @@ export default function Home() {
     liveContent,
     thinkTime,
     currentSessionId,
+    setCurrentSessionId,
     streamMode,
     start: startAgentSession,
     stop: stopAgentSession,
@@ -381,10 +382,6 @@ export default function Home() {
           setShowPreview((v) => !v);
         }}
         onToggleWorkspace={() => {
-          // 无 session 时先建空 session (前端不立即发消息), 让用户能上传文件
-          if (!currentSessionId) {
-            handleCreateSession();
-          }
           setShowWorkspace((v) => !v);
         }}
         onResetWorkspace={handleCreateSession}
@@ -484,10 +481,18 @@ export default function Home() {
           isUploading={isUploading}
           onSelectDocx={setActiveDocx}
           onUpload={async (file: File) => {
-            if (!currentSessionId) return;
+            let sessionId = currentSessionId;
+            if (!sessionId) {
+              const now = new Date();
+              const pad = (n: number) => n.toString().padStart(2, '0');
+              const formatted = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+              sessionId = `session-${formatted}`;
+              setCurrentSessionId(sessionId);
+            }
             setIsUploading(true);
             try {
-              await uploadToWorkspace(currentSessionId, file);
+              await uploadToWorkspace(sessionId, file);
+              void refreshSessions();
             } finally {
               setIsUploading(false);
             }
