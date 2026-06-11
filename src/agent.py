@@ -443,16 +443,18 @@ class Agent:
                             finish_reason = fr
                         msg = getattr(choice, "message", None)
                         if msg is not None:
-                            # Reasoning — SenseNova 非流式路径: message.model_extra.reasoning
-                            # (与流式 delta.model_extra.reasoning 字段路径同源, 只是挂在 message 上)
-                            extra = getattr(msg, "model_extra", None)
-                            if isinstance(extra, dict):
-                                rc = extra.get("reasoning")
-                                if rc:
-                                    accumulated_reasoning += rc
-                                    reasoning_yielded = True
-                                    self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning), "mode": "blocking"})
-                                    yield {"type": "reasoning", "delta": rc}
+                            # Reasoning — 优先获取 OpenAI/DeepSeek 标准的 reasoning_content 字段
+                            rc = getattr(msg, "reasoning_content", None)
+                            # 其次获取 SenseNova 的 model_extra.reasoning 字段
+                            if not rc:
+                                extra = getattr(msg, "model_extra", None)
+                                if isinstance(extra, dict):
+                                    rc = extra.get("reasoning")
+                            if rc:
+                                accumulated_reasoning += rc
+                                reasoning_yielded = True
+                                self._append_log("chunk_event", {"round": self._round_index, "type": "reasoning", "len": len(rc), "cum": len(accumulated_reasoning), "mode": "blocking"})
+                                yield {"type": "reasoning", "delta": rc}
                             # Content — OpenAI SDK 在非流式下返回完整字符串, 一次 yield
                             c = getattr(msg, "content", None)
                             if c:
