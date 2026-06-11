@@ -32,6 +32,10 @@ SESSION_TOOLS = {
     "ls",
     "read",
     "analyze_image_content",
+    # v2: docx_tools 读类沙箱化 (Phase 3c)
+    "read_docx_structure",
+    "find_text",
+    "diff_docx",
 }
 
 from openai import APITimeoutError, APIConnectionError, BadRequestError

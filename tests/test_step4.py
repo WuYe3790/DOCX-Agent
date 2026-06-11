@@ -145,28 +145,27 @@ def test_parse_markdown_draft_parses_from_session_sandbox():
 
 
 def test_analyze_style_samples_writes_profile_to_session_sandbox():
-    """Test 6: analyze_docx_style_samples(session_id, docx_path) → profile 写到 session_dir/style_profiles/"""
-    # 需要一个真实 docx, 我们用现有 out/uploads 或 文档格式测试/ 下的文件
-    # 简化: 用最小 docx 模板
-    test_docx = TMP_DIR / "test_template.docx"
-    # 用 zipfile 写一个最小 docx (内容可能不解析, 但 analyze 会跑通)
+    """Test 6: analyze_docx_style_samples(session_id, docx_path) → profile 写到 session_workspace/style_profiles/"""
+    # v2: docx 必须放在 session_workspace 内 (沙箱要求)
+    session_id = "sess-style-1"
+    test_docx = TMP_DIR / "out" / "sessions" / session_id / "workspace" / "test_template.docx"
+    test_docx.parent.mkdir(parents=True, exist_ok=True)
     import zipfile
     with zipfile.ZipFile(test_docx, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("[Content_Types].xml", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/word/document.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/></Types>")
         zf.writestr("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='word/document.xml'/></Relationships>")
         zf.writestr("word/document.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>测试标题</w:t></w:r></w:p><w:p><w:r><w:t>这是一段正文文本，用于样式分析测试。</w:t></w:r></w:p></w:body></w:document>')
 
-    session_id = "sess-style-1"
-    result_json = analyze_docx_style_samples(session_id=session_id, docx_path=str(test_docx))
+    result_json = analyze_docx_style_samples(session_id=session_id, docx_path="test_template.docx")
     result = json.loads(result_json)
     assert result["status"] == "ok"
 
-    # 关键验证: profile 写到 session_dir/style_profiles/, **不**写到全局 out/style_profiles/
+    # 关键验证: profile 写到 session_workspace/style_profiles/, **不**写到全局 out/style_profiles/
     profile_path = Path(result["style_profile_path"])
     assert profile_path.exists(), f"profile 未写入: {profile_path}"
-    assert "sessions" in str(profile_path) and session_id in str(profile_path), f"profile 应在 session_dir/style_profiles/ 下, 实际 {profile_path}"
+    assert "workspace" in str(profile_path) and "style_profiles" in str(profile_path), f"profile 应在 session_workspace/style_profiles/ 下, 实际 {profile_path}"
     assert not (TMP_DIR / "out" / "style_profiles").exists(), f"全局 style_profiles/ 不应创建: {TMP_DIR / 'out' / 'style_profiles'}"
-    print("[OK] Test 6: analyze_docx_style_samples → session_dir/style_profiles/")
+    print("[OK] Test 6: analyze_docx_style_samples → session_workspace/style_profiles/")
 
 
 def test_llm_sees_no_session_id_in_tools_schema():

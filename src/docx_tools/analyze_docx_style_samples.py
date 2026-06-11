@@ -1,7 +1,11 @@
 import re
+import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError
 
 from .common import (
     NS,
@@ -24,8 +28,12 @@ def analyze_docx_style_samples(
     max_samples: int = 16,
     examples_per_sample: int = 4,
 ) -> str:
-    """提取文档中的格式样本，供 AI 和用户审核正文/标题/表格样式。"""
-    root = load_document_xml(docx_path)
+    """v2: 提取 session workspace 内 docx 的格式样本 (沙箱化)"""
+    try:
+        docx_path_resolved = resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)
+    except WorkspacePathError as e:
+        return json_result({"status": "error", "code": e.code, "message": e.user_message})
+    root = load_document_xml(str(docx_path_resolved))
     all_tables = tables(root)
     table_index_by_id = {id(table): index for index, table in enumerate(all_tables, start=1)}
 
@@ -93,7 +101,7 @@ def analyze_docx_style_samples(
 
     result = {
         "status": "ok",
-        "docx_path": docx_path,
+        "docx_path": str(docx_path_resolved),
         "needs_user_review": True,
         "style_profile_path": "",
         "style_samples": style_samples,
@@ -103,7 +111,7 @@ def analyze_docx_style_samples(
             "大规模写入前，优先按用户确认的 sample_id 仿写格式，避免把正文写成标题或加粗格式。",
         ],
     }
-    profile_path = _resolve_profile_path(docx_path, output_profile_path, session_id)
+    profile_path = _resolve_profile_path(docx_path_resolved, output_profile_path, session_id)
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_text(json_result(result), encoding="utf-8")
     result["style_profile_path"] = str(profile_path)
@@ -111,16 +119,16 @@ def analyze_docx_style_samples(
     return json_result(result)
 
 
-def _resolve_profile_path(docx_path: str, output_profile_path: str, session_id: str) -> Path:
-    """v2: profile 强制写到 session_dir/style_profiles/ 下 (沙箱化, 不再全局 out/style_profiles/)"""
-    session_dir = Path("out") / "sessions" / session_id
-    style_profiles_dir = session_dir / "style_profiles"
+def _resolve_profile_path(docx_path: Path, output_profile_path: str, session_id: str) -> Path:
+    """v2: profile 强制写到 session_workspace/style_profiles/ 下 (沙箱化)"""
+    from workspace.guard import workspace_dir
+    style_profiles_dir = workspace_dir(session_id) / "style_profiles"
     style_profiles_dir.mkdir(parents=True, exist_ok=True)
 
     if output_profile_path:
-        # 用户指定了文件名 — 强制放进 session_dir/style_profiles/, 忽略原路径
+        # 用户指定了文件名 — 强制放进 style_profiles/, basename 化防越界
         return style_profiles_dir / Path(output_profile_path).name
-    stem = Path(docx_path).stem
+    stem = docx_path.stem
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return style_profiles_dir / f"{stem}_{timestamp}.json"
 
@@ -279,14 +287,14 @@ tools_schema = {
     "type": "function",
     "function": {
         "name": "analyze_docx_style_samples",
-        "description": "只读分析 DOCX 中的常见格式样本，返回 sample_id、格式字段、位置、示例文本和候选角色提示，用于让 AI 和用户审核正文/标题/表格样式。",
+        "description": "只读分析 session workspace 内 DOCX 中的常见格式样本，返回 sample_id、格式字段、位置、示例文本和候选角色提示。",
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "要分析的 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "要分析的 .docx 文件路径 (相对 workspace 根)"},
                 "output_profile_path": {
                     "type": "string",
-                    "description": "可选，样式画像 JSON 输出路径；默认写入 out/style_profiles/文档名_时间戳.json",
+                    "description": "可选，样式画像 JSON 输出文件名（仅 basename）; 默认 <stem>_<timestamp>.json",
                 },
                 "max_samples": {"type": "integer", "description": "最多返回多少组格式样本，默认 16"},
                 "examples_per_sample": {"type": "integer", "description": "每组格式最多返回多少个示例文本，默认 4"},

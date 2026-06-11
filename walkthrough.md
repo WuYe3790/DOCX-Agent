@@ -122,3 +122,76 @@
 **回归**: 203 + 9 = 212 passed, 1 skipped
 
 ---
+
+## 阶段 3a: basic_tools 沙箱化 (commit `f4e87f2`)
+
+**做了什么**: 3 个 basic_tools 工具加 `session_id` 隐式注入 + 走 `resolve_workspace_path`。
+
+**修改**:
+- `src/basic_tools/ls.py`: 默认 `path` 改 workspace 根, 走 resolver `must_exist=True, must_be_dir=True`
+- `src/basic_tools/read.py`: `file_path` 走 resolver `must_exist=True, must_be_file=True`, 保留原 10MB / 编码检测 / 行号逻辑
+- `src/basic_tools/analyze_image_content.py`: `image_path` 走 resolver + 加 10MB cap (与 read 对齐)
+- `src/agent.py`: SESSION_TOOLS 从 6 扩展到 9 (+ls/read/analyze_image_content)
+
+**关键设计点**:
+- `session_id` **不**出现在 `tools_schema` 里 (避坑 1: LLM 不可见, dispatcher 隐式注入)
+- 本想加 session_id 到 schema, 老测试 `test_llm_sees_no_session_id_in_tools_schema` 立即拒绝 — 修正保持与 `write_markdown_draft` 等老 session tool 一致
+- `test_dispatcher_skips_non_session_tools` 改用 `set_text_format` (未沙箱化的 docx 写入工具) 做"非 session tool"测试样本
+
+**回归**: 212 passed, 1 skipped
+
+---
+
+## 阶段 3b: md_tools 沙箱化 + draft_path 重构 (commit `c122b6b`)
+
+**做了什么**: 6 个 md_tools 工具 (`read/write/parse_markdown_draft` / `markdown_to_word` / `apply_markdown_ir_after_paragraph` / `apply_markdown_ir_to_table_cell`) 走 `resolve_workspace_path`,并把 `draft_path` 改成 resolver 薄包装。
+
+**关键改动**:
+
+| 文件 | 改动 |
+|---|---|
+| `src/md_tools/common.py` | `draft_path` 改用 `resolve_workspace_path(session_id, "drafts/" + basename, must_exist=False)`; 保留 .. 段 / 绝对路径 显式守卫 (在 basename 之前, 符合老 test 期望的"越界"消息); `read_markdown_text` 走 resolver must_exist=True, must_be_file=True |
+| `read_markdown_draft.py` | 删 `session_dir = Path("out") / "sessions" / session_id` 局部拼接, 用 `read_markdown_text(session_id, markdown_path)` |
+| `write_markdown_draft.py` | 同上, `draft_path(session_id, output_path)` |
+| `parse_markdown_draft.py` | 同 read |
+| `apply_markdown_ir_after_paragraph.py` | 同 read |
+| `apply_markdown_ir_to_table_cell.py` | 同 read |
+
+**新签名**: `draft_path(session_id, raw_path)` 替代旧 `(path, session_dir)`, `read_markdown_text(session_id, raw_path)` 同样。
+
+**测试适配**:
+- `tests/test_step4.py` 路径断言从 `session_dir/drafts/` 改为 `session_workspace/drafts/` (新结构: workspace 是 session 下的子目录)
+- 显式 mock `workspace.guard.WORKSPACE_ROOT` → `TMP_DIR`
+- `draft_path` 调用改用新签名
+
+**回归**: 212 passed, 1 skipped
+
+---
+
+## 阶段 3c: docx_tools 读类沙箱化 (待 commit)
+
+**做了什么**: 4 个 docx 读类工具加 `session_id` 注入 + resolver 沙箱化。
+
+**修改**:
+
+| 工具 | 路径参数 | resolver 行为 |
+|---|---|---|
+| `read_docx_structure` | `docx_path` | `must_exist=True, must_be_file=True` |
+| `find_text` | `docx_path` | 同上 |
+| `analyze_docx_style_samples` | `docx_path` + `output_profile_path` | docx 读; profile 走 `workspace/style_profiles/` 子目录 (保留旧 `_resolve_profile_path` 强制重定向) |
+| `diff_docx` | `before_docx` + `after_docx` | 两个都走 resolver `must_exist=True, must_be_file=True` |
+
+**SESSION_TOOLS 扩展**: 9 → 12 (+ read_docx_structure / find_text / diff_docx)
+- `analyze_docx_style_samples` 已在 SESSION_TOOLS (老)
+
+**关键设计**:
+- 4 个工具的 `tools_schema` 描述里 `docx_path` 注明"相对 workspace 根",提示 LLM 用相对路径
+- `analyze_docx_style_samples` 的 `_resolve_profile_path` 改用 `workspace_dir(session_id) / "style_profiles"`,profile 文件名仍用 `Path(output_profile_path).name` (basename 化防越界)
+
+**测试适配**:
+- `test_analyze_style_samples_writes_profile_to_session_sandbox` 把 test docx 移到 `TMP_DIR / out / sessions / sess-style-1 / workspace / test_template.docx`,传相对路径 `"test_template.docx"`
+- profile 路径断言从 `session_dir/style_profiles/` 改为 `session_workspace/style_profiles/`
+
+**回归**: 212 passed, 1 skipped
+
+---

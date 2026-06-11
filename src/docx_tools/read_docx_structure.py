@@ -68,11 +68,11 @@ tools_schema = {
     "type": "function",
     "function": {
         "name": "read_docx_structure",
-        "description": "读取 docx 的正文结构，返回非空段落、表格行列文本和定位信息。用于编辑前先定位。",
+        "description": "读取 session workspace 内 docx 的正文结构，返回非空段落、表格行列文本和定位信息。用于编辑前先定位。",
         "parameters": {
             "type": "object",
             "properties": {
-                "docx_path": {"type": "string", "description": "要读取的 .docx 文件路径"},
+                "docx_path": {"type": "string", "description": "要读取的 .docx 文件路径 (相对 workspace 根)"},
                 "max_items": {"type": "integer", "description": "最多返回多少个非空段落，默认 80"},
             },
             "required": ["docx_path"],
