@@ -317,3 +317,64 @@ def resolve_docx_io(session_id: str, docx_path: str, output_path: str):
 **回归**: TypeScript 0 错误 (前端测试由 Phase 5 覆盖)
 
 ---
+
+## 阶段 3c 修复 (commit 待合): read_docx_structure 函数体未沙箱化
+
+**问题发现**: Phase 3c 当时只改了 `tools_schema` 描述 (commit `9b419e1` 实际 diff 只动 schema 4 行), 函数体本身没改。`read_docx_structure(docx_path, max_items=80)` 仍直接 `load_document_xml(docx_path)`,没有 session_id 注入 + resolver。
+
+**修复**: 重写 `src/docx_tools/read_docx_structure.py`, 加 `session_id` 第一参 + `resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)` + 用 `str(docx_path_resolved)` 调用 `load_document_xml`。错误返回 `json_result({"status":"error","code":e.code,"message":e.user_message})`。
+
+**回归**: 234 passed, 1 skipped
+
+---
+
+## 阶段 5: 端到端 WS 测试 + 手动 smoke (待 commit)
+
+**做了什么**: 写 `tests/test_workspace_e2e.py` 12 个 e2e case, 覆盖 4 个场景。不依赖真实 LLM, 走 HTTP endpoint + 工具直接调用, 验证沙箱链路 + 工具横切。
+
+**4 个场景**:
+
+| 场景 | case | 验证 |
+|---|---|---|
+| 沙箱链路 (4) | `test_upload_then_read_docx` | 上传 docx → read_docx_structure 读成功 |
+| | `test_tool_blocks_absolute_path` | 工具拒绝 `C:\Windows\...` 绝对路径 |
+| | `test_tool_blocks_traversal` | 工具拒绝 `../../etc/passwd` |
+| | `test_delete_session_cascades_workspace` | 删 session → workspace 物理消失 |
+| zip 链路 (3) | `test_malicious_zip_rejected` | 含 `../` 恶意 zip → 拒绝 + workspace 仍空 |
+| | `test_normal_zip_extracts_and_md_readable` | 正常 zip 解压到子目录 |
+| | `test_md_in_zip_subdir_readable_by_md_tool` | 验证 zip 解压内容可访问 |
+| 工具链横切 (2) | `test_upload_analyze_read` | 上传 docx → analyze_docx_style_samples 沙箱成功 |
+| | `test_write_then_read_md_draft` | write_markdown_draft → read_markdown_draft 走沙箱 |
+| quota 链路 (3) | `test_quota_exhausted_upload_507` | 累计超 quota → 507 |
+| | `test_delete_frees_quota` | 删除后 quota 释放 |
+| | `test_max_file_size_enforced` | 单文件 > MAX_FILE_BYTES → 413 |
+
+**手动 smoke 测试** (用户本地跑):
+```bash
+# 终端 1: 启动 backend
+cd J:\学习\项目\文档agent
+python src/server.py
+
+# 终端 2: 启动 frontend
+cd J:\学习\项目\文档agent\frontend
+npm run dev
+
+# 浏览器: http://localhost:3000
+# 1. 新建会话
+# 2. 点 "文件" 按钮
+# 3. 拖入 test.docx
+# 4. 选为 active docx
+# 5. 在输入框发 "分析这个文档"
+# 6. 观察 LLM 调工具 (read_docx_structure) 拿正确数据
+# 7. 上传第二个 docx → 切 active → 再发 prompt
+# 8. 重启 server → 该 session 的 workspace 还在 (持久化)
+# 9. 故意在 prompt 写绝对路径 → LLM 工具应被 server 拒绝
+```
+
+**未在 Phase 5 实现** (按 plan 留 future):
+- WS `set_active_docx` 消息 (用户提的"active 中途切换"也是 Phase 1 decision 中留 future)
+- 启动时主动用 workspace 中的 .docx 作为 start 消息的 `workspaceDocxName` (前端 `use-agent-session.ts` 暂未改)
+
+**回归**: 234 passed, 1 skipped
+
+---

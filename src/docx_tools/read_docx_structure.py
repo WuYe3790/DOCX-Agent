@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError
+
 from .common import (
     NS,
     W,
@@ -12,9 +18,13 @@ from .common import (
 )
 
 
-def read_docx_structure(docx_path: str, max_items: int = 80) -> str:
-    """读取 word/document.xml 中的段落文本和表格单元格文本。"""
-    root = load_document_xml(docx_path)
+def read_docx_structure(session_id: str, docx_path: str, max_items: int = 80) -> str:
+    """v2: 读取 session workspace 内的 docx 的段落 + 表格结构 (沙箱化)"""
+    try:
+        docx_path_resolved = resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)
+    except WorkspacePathError as e:
+        return json_result({"status": "error", "code": e.code, "message": e.user_message})
+    root = load_document_xml(str(docx_path_resolved))
     para_items = []
     for index, paragraph in enumerate(paragraphs(root), start=1):
         text = paragraph_text(paragraph)
@@ -55,7 +65,7 @@ def read_docx_structure(docx_path: str, max_items: int = 80) -> str:
 
     return json_result(
         {
-            "docx_path": docx_path,
+            "docx_path": str(docx_path_resolved),
             "paragraph_count": len(paragraphs(root)),
             "table_count": len(tables(root)),
             "paragraphs": para_items,
@@ -103,7 +113,7 @@ def _table_depth(table) -> int:
     return depth
 
 
-def _table_parent_location(table, table_index_by_id: dict[int, int]) -> dict | None:
+def _table_parent_location(table, table_index_by_id: dict) -> dict | None:
     parent_cell = nearest_ancestor(table, f"{W}tc")
     if parent_cell is None:
         return None
