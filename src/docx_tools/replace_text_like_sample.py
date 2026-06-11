@@ -17,7 +17,7 @@ from .style_profile import load_style_sample
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import to_relative_path
+from workspace.guard import to_relative_path, resolve_workspace_path
 
 
 def replace_text_like_sample(
