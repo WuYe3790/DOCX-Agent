@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
 from .common import file_sha256, json_result, load_document_xml, paragraph_text, paragraphs
 
@@ -54,8 +54,8 @@ def diff_docx(session_id: str, before_docx: str, after_docx: str, marker_prefix:
 
     return json_result(
         {
-            "before_docx": str(before_path),
-            "after_docx": str(after_path),
+            "before_docx": to_relative_path(session_id, before_path),
+            "after_docx": to_relative_path(session_id, after_path),
             "changed_files": changed_files,
             "paragraph_changes": paragraph_changes[:100],
             "notes": [

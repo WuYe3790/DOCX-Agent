@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
 from .common import (
     NS,
@@ -65,7 +65,7 @@ def read_docx_structure(session_id: str, docx_path: str, max_items: int = 80) ->
 
     return json_result(
         {
-            "docx_path": str(docx_path_resolved),
+            "docx_path": to_relative_path(session_id, docx_path_resolved),
             "paragraph_count": len(paragraphs(root)),
             "table_count": len(tables(root)),
             "paragraphs": para_items,

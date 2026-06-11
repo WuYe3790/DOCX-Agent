@@ -34,12 +34,22 @@ def markdown_to_word(
     if not actions:
         return json_result({"status": "error", "message": "actions 不能为空", "action_guide": ACTION_GUIDE})
 
-    output = Path(output_path)
+    try:
+        docx_path_resolved = resolve_workspace_path(session_id, docx_path, must_exist=True, must_be_file=True)
+        output_path_resolved = resolve_workspace_path(session_id, output_path, must_exist=False)
+        if style_profile_path:
+            style_profile_path_resolved = resolve_workspace_path(session_id, style_profile_path, must_exist=True, must_be_file=True)
+        else:
+            style_profile_path_resolved = None
+    except WorkspacePathError as e:
+        return json_result({"status": "error", "message": e.user_message, "action_guide": ACTION_GUIDE})
+
+    output = output_path_resolved
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_paths = _temp_paths(output, len(actions))
-    if style_profile_path and not style_mapping:
-        style_mapping = derive_style_mapping_from_bindings(style_profile_path)
-    current_input = docx_path
+    if style_profile_path_resolved and not style_mapping:
+        style_mapping = derive_style_mapping_from_bindings(session_id, style_profile_path)
+    current_input = str(docx_path_resolved)
     action_results = []
     diagnostics = []
     support_summary = {"native": 0, "degraded": 0, "rejected": 0}
@@ -47,7 +57,7 @@ def markdown_to_word(
     try:
         for index, action in enumerate(actions, start=1):
             is_final_action = index == len(actions)
-            current_output = output_path if index == len(actions) else str(temp_paths[index - 1])
+            current_output = str(output_path_resolved) if index == len(actions) else str(temp_paths[index - 1])
             try:
                 result = _run_action(
                     action=action,
@@ -76,7 +86,7 @@ def markdown_to_word(
                     "action_index": index,
                     "type": action_type,
                     "status": parsed.get("status"),
-                    "temporary_output_path": None if is_final_action else current_output,
+                    "temporary_output_path": None if is_final_action else to_relative_path(session_id, Path(current_output)),
                 }
             )
             if parsed.get("status") != "ok":
@@ -92,14 +102,14 @@ def markdown_to_word(
             current_input = current_output
     finally:
         for temp_path in temp_paths:
-            if str(temp_path) != output_path and temp_path.exists():
+            if temp_path != output_path_resolved and temp_path.exists():
                 temp_path.unlink()
 
     return json_result(
         {
             "status": "ok",
-            "docx_path": docx_path,
-            "output_path": output_path,
+            "docx_path": to_relative_path(session_id, docx_path_resolved),
+            "output_path": to_relative_path(session_id, output_path_resolved),
             "markdown_path": markdown_path,
             "style_profile_path": style_profile_path,
             "style_mapping": style_mapping or {},

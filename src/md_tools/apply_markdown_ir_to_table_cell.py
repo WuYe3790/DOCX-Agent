@@ -87,7 +87,7 @@ def apply_markdown_ir_to_table_cell(
         return json_result({"status": "error", "message": str(exc)})
 
     try:
-        style_samples = {sample_id: load_style_sample(style_profile_path, sample_id) for sample_id in sorted(lowering.style_sample_ids)}
+        style_samples = {sample_id: load_style_sample(session_id, style_profile_path, sample_id) for sample_id in sorted(lowering.style_sample_ids)}
     except (FileNotFoundError, KeyError, ValueError) as exc:
         return json_result({"status": "error", "message": str(exc), "style_profile_path": style_profile_path})
 

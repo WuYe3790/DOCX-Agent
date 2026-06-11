@@ -15,6 +15,11 @@ from .common import (
 from .insert_paragraph_after import _select_style_paragraph
 from .style_profile import load_style_sample
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import to_relative_path, resolve_workspace_path
+
 
 def insert_paragraph_after_like_sample(
     session_id: str,
@@ -30,7 +35,7 @@ def insert_paragraph_after_like_sample(
 ) -> str:
     """在锚点段落后插入新段落，并按指定样式样本设置格式。"""
     input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
-    style_sample = load_style_sample(style_profile_path, sample_id)
+    style_sample = load_style_sample(session_id, style_profile_path, sample_id)
     root = load_document_xml(str(input_path))
     current_occurrence = 0
 
@@ -66,19 +71,24 @@ def insert_paragraph_after_like_sample(
             return json_result(
                 {
                     "status": "ok",
-                    "docx_path": str(input_path),
-                    "output_path": str(output_path_resolved),
+                    "docx_path": to_relative_path(session_id, input_path),
+                    "output_path": to_relative_path(session_id, output_path_resolved),
                     "anchor_text": anchor_text,
                     "new_text": new_text,
                     "sample_id": sample_id,
-                    "style_profile_path": style_profile_path,
+                    "style_profile_path": to_relative_path(session_id, resolve_workspace_path(session_id, style_profile_path)),
                     "anchor_paragraph_index": paragraph_index,
                     "inserted_paragraph_count": 1 + inserted_extra_count,
                     "location": paragraph_location(paragraph),
                 }
             )
 
-    return json_result({"status": "not_found", "docx_path": str(input_path), "anchor_text": anchor_text, "occurrence": occurrence})
+    return json_result({
+        "status": "not_found",
+        "docx_path": to_relative_path(session_id, input_path),
+        "anchor_text": anchor_text,
+        "occurrence": occurrence,
+    })
 
 
 def _empty_paragraph_like(paragraph):

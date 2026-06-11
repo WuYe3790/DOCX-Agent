@@ -4,7 +4,7 @@ from pathlib import Path
 
 # v2: 沙箱化 — 所有路径走 resolve_workspace_path 强制在 session workspace 内
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path  # noqa: E402
 
 
 def ls(session_id: str, path: str = ".") -> str:
@@ -33,7 +33,7 @@ def ls(session_id: str, path: str = ".") -> str:
         # 按照 目录在前, 文件在后, 并按名称排序
         entries.sort(key=lambda x: (not x["is_dir"], x["name"]))
         return json.dumps(
-            {"status": "ok", "path": str(p), "entries": entries},
+            {"status": "ok", "path": to_relative_path(session_id, p), "entries": entries},
             ensure_ascii=False, indent=2,
         )
     except Exception as e:

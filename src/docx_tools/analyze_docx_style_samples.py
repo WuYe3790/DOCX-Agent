@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
 from .common import (
     NS,
@@ -101,7 +101,7 @@ def analyze_docx_style_samples(
 
     result = {
         "status": "ok",
-        "docx_path": str(docx_path_resolved),
+        "docx_path": to_relative_path(session_id, docx_path_resolved),
         "needs_user_review": True,
         "style_profile_path": "",
         "style_samples": style_samples,
@@ -114,7 +114,7 @@ def analyze_docx_style_samples(
     profile_path = _resolve_profile_path(docx_path_resolved, output_profile_path, session_id)
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_text(json_result(result), encoding="utf-8")
-    result["style_profile_path"] = str(profile_path)
+    result["style_profile_path"] = to_relative_path(session_id, profile_path)
     profile_path.write_text(json_result(result), encoding="utf-8")
     return json_result(result)
 

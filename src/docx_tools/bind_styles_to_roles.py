@@ -1,16 +1,31 @@
 import json
+import sys
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
 from .common import json_result
 from .style_profile import FIXED_ROLES
 
 
 def bind_styles_to_roles(
+    session_id: str,
     style_profile_path: str,
     bindings: dict[str, str],
 ) -> str:
     """把 sample_id 显式绑定到 5 个标准角色，写入 style_profile.json 的 role_bindings 字段。"""
-    profile_path = Path(style_profile_path)
+    try:
+        profile_path = resolve_workspace_path(session_id, style_profile_path, must_exist=True, must_be_file=True)
+    except WorkspacePathError as e:
+        return json_result(
+            {
+                "status": "error",
+                "code": e.code,
+                "message": e.user_message,
+            }
+        )
+
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -18,7 +33,7 @@ def bind_styles_to_roles(
             {
                 "status": "error",
                 "message": f"无法读取样式画像: {exc}",
-                "style_profile_path": str(profile_path),
+                "style_profile_path": to_relative_path(session_id, profile_path),
             }
         )
 
@@ -37,7 +52,7 @@ def bind_styles_to_roles(
                 ),
                 "available_sample_ids": available_sample_ids,
                 "fixed_roles": list(FIXED_ROLES),
-                "style_profile_path": str(profile_path),
+                "style_profile_path": to_relative_path(session_id, profile_path),
             }
         )
 
@@ -51,7 +66,7 @@ def bind_styles_to_roles(
                 ),
                 "available_sample_ids": available_sample_ids,
                 "fixed_roles": list(FIXED_ROLES),
-                "style_profile_path": str(profile_path),
+                "style_profile_path": to_relative_path(session_id, profile_path),
             }
         )
 
@@ -67,7 +82,7 @@ def bind_styles_to_roles(
                 ),
                 "available_sample_ids": available_sample_ids,
                 "fixed_roles": list(FIXED_ROLES),
-                "style_profile_path": str(profile_path),
+                "style_profile_path": to_relative_path(session_id, profile_path),
             }
         )
 
@@ -80,7 +95,7 @@ def bind_styles_to_roles(
     return json_result(
         {
             "status": "ok",
-            "style_profile_path": str(profile_path),
+            "style_profile_path": to_relative_path(session_id, profile_path),
             "role_bindings": dict(bindings),
             "available_sample_ids": available_sample_ids,
             "fixed_roles": list(FIXED_ROLES),

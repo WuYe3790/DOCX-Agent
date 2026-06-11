@@ -16,6 +16,11 @@ from .common import (
 )
 from .style_profile import load_style_sample
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import to_relative_path, resolve_workspace_path
+
 
 def replace_table_cell_like_sample(
     session_id: str,
@@ -31,7 +36,7 @@ def replace_table_cell_like_sample(
 ) -> str:
     """替换表格单元格全部文本，并按指定样式样本设置格式。"""
     input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
-    style_sample = load_style_sample(style_profile_path, sample_id)
+    style_sample = load_style_sample(session_id, style_profile_path, sample_id)
     root = load_document_xml(str(input_path))
     try:
         table = get_table_by_index(root, table_index)
@@ -60,14 +65,14 @@ def replace_table_cell_like_sample(
     return json_result(
         {
             "status": "ok",
-            "docx_path": str(input_path),
-            "output_path": str(output_path_resolved),
+            "docx_path": to_relative_path(session_id, input_path),
+            "output_path": to_relative_path(session_id, output_path_resolved),
             "table_index": table_index,
             "row_index": row_index,
             "cell_index": cell_index,
             "new_text": new_text,
             "sample_id": sample_id,
-            "style_profile_path": style_profile_path,
+            "style_profile_path": to_relative_path(session_id, resolve_workspace_path(session_id, style_profile_path)),
             "before_text": before_text,
             "after_text": after_text,
             "inserted_paragraph_count": inserted_paragraph_count,

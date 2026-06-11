@@ -139,6 +139,31 @@ def resolve_workspace_path(
     return target
 
 
+def to_relative_path(session_id: str, resolved_path: Path) -> str:
+    """与 resolve_workspace_path 采用相同的沙箱逻辑，反向校验并返回相对路径字符串。
+
+    Args:
+        session_id: Session ID
+        resolved_path: 绝对 Path 对象
+
+    Returns:
+        相对 workspace 根的 POSIX 路径字符串（使用正斜杠）
+    """
+    validate_session_id(session_id)
+    workspace = workspace_dir(session_id).resolve()
+    target = Path(resolved_path).resolve()
+
+    # 越界检测（反向校验）
+    if not target.is_relative_to(workspace):
+        raise WorkspacePathError(
+            "out_of_root", f"目标路径超出沙箱范围，无法输出相对路径: {resolved_path}"
+        )
+
+    # 返回相对 POSIX 路径 (例如 "style_profiles/abc.json")
+    return target.relative_to(workspace).as_posix()
+
+
+
 def safe_workspace_filename(original: str) -> str:
     """清洗上传文件名 — basename 化, 拒绝控制字符, 截断 200 字符
 

@@ -19,7 +19,26 @@ XML = f"{{{XML_NS}}}"
 
 
 def json_result(data) -> str:
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    def _clean(val):
+        if isinstance(val, str):
+            val_normalized = val.replace('\\', '/')
+            idx = val_normalized.find("out/sessions/")
+            if idx != -1:
+                remaining = val_normalized[idx + 13:]
+                parts = remaining.split('/', 2)
+                if len(parts) >= 3 and parts[1] == "workspace":
+                    return parts[2]
+                elif len(parts) >= 2 and parts[1] == "workspace":
+                    return "."
+            return val
+        elif isinstance(val, dict):
+            return {k: _clean(v) for k, v in val.items()}
+        elif isinstance(val, list):
+            return [_clean(x) for x in val]
+        return val
+
+    cleaned_data = _clean(data)
+    return json.dumps(cleaned_data, ensure_ascii=False, indent=2)
 
 
 def resolve_docx_io(session_id: str, docx_path: str, output_path: str):

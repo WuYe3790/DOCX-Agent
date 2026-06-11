@@ -20,6 +20,7 @@ from workspace.guard import (  # noqa: E402
     resolve_workspace_path,
     workspace_dir,
     WorkspacePathError,
+    to_relative_path,
 )
 
 from .common import json_result
@@ -158,8 +159,8 @@ def unzip_docx(
 
         return json_result({
             "status": "ok",
-            "docx_path": str(docx_path_resolved),
-            "output_dir": str(output_dir_resolved),
+            "docx_path": to_relative_path(session_id, docx_path_resolved),
+            "output_dir": to_relative_path(session_id, output_dir_resolved),
             "file_count": sum(1 for p in output_dir_resolved.rglob("*") if p.is_file()),
             "decompressed_bytes": decompressed_so_far,
         })

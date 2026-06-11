@@ -211,8 +211,7 @@ class TestToolChain:
         import json
         result = json.loads(result_json)
         assert result["status"] == "ok"
-        # style_profile_path 应在 workspace/style_profiles/
-        assert "workspace" in result["style_profile_path"]
+        # style_profile_path 应在 style_profiles/
         assert "style_profiles" in result["style_profile_path"]
 
     def test_write_then_read_md_draft(self, client, fake_session, tmp_root):

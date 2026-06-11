@@ -1,6 +1,9 @@
 import json
+import sys
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).parent.parent))
+from workspace.guard import resolve_workspace_path
 
 FIXED_ROLES = ("title", "section_heading", "body", "table_cell", "placeholder")
 
@@ -14,22 +17,24 @@ ROLE_TO_BLOCK_TYPES: dict[str, tuple[str, ...]] = {
 _DERIVATION_ORDER = ("body", "section_heading", "title", "table_cell")
 
 
-def load_style_sample(style_profile_path: str, sample_id: str) -> dict:
-    profile = json.loads(Path(style_profile_path).read_text(encoding="utf-8"))
+def load_style_sample(session_id: str, style_profile_path: str, sample_id: str) -> dict:
+    profile_path = resolve_workspace_path(session_id, style_profile_path, must_exist=True, must_be_file=True)
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
     for sample in profile.get("style_samples", []):
         if sample.get("sample_id") == sample_id:
             return sample
     raise ValueError(f"sample_id not found in style profile: {sample_id}")
 
 
-def derive_style_mapping_from_bindings(style_profile_path: str) -> dict[str, str]:
+def derive_style_mapping_from_bindings(session_id: str, style_profile_path: str) -> dict[str, str]:
     """从 style_profile 的 role_bindings 推导 block_type -> sample_id 映射。
 
     无 role_bindings 时返回空 dict，调用方应回退到默认行为。
     """
     try:
-        profile = json.loads(Path(style_profile_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        profile_path = resolve_workspace_path(session_id, style_profile_path, must_exist=True, must_be_file=True)
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except Exception:
         return {}
     bindings = profile.get("role_bindings")
     if not isinstance(bindings, dict) or not bindings:

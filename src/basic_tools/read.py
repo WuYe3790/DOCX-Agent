@@ -4,7 +4,7 @@ from pathlib import Path
 
 # v2: 沙箱化
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path  # noqa: E402
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
 DEFAULT_LIMIT = 2000
@@ -82,7 +82,7 @@ def read(session_id: str, file_path: str, offset: int = 0, limit: int = -1) -> s
         return json.dumps(
             {
                 "status": "ok",
-                "file_path": str(p),
+                "file_path": to_relative_path(session_id, p),
                 "encoding": encoding,
                 "total_lines": total_lines,
                 "offset": line_offset,
@@ -105,7 +105,7 @@ def read(session_id: str, file_path: str, offset: int = 0, limit: int = -1) -> s
     return json.dumps(
         {
             "status": "ok",
-            "file_path": str(p),
+            "file_path": to_relative_path(session_id, p),
             "encoding": encoding,
             "total_lines": total_lines,
             "offset": line_offset,

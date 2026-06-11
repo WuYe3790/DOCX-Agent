@@ -161,9 +161,10 @@ def test_analyze_style_samples_writes_profile_to_session_sandbox():
     assert result["status"] == "ok"
 
     # 关键验证: profile 写到 session_workspace/style_profiles/, **不**写到全局 out/style_profiles/
-    profile_path = Path(result["style_profile_path"])
+    workspace_root = TMP_DIR / "out" / "sessions" / session_id / "workspace"
+    profile_path = workspace_root / result["style_profile_path"]
     assert profile_path.exists(), f"profile 未写入: {profile_path}"
-    assert "workspace" in str(profile_path) and "style_profiles" in str(profile_path), f"profile 应在 session_workspace/style_profiles/ 下, 实际 {profile_path}"
+    assert "style_profiles" in result["style_profile_path"], f"profile 相对路径应包含 style_profiles/, 实际 {result['style_profile_path']}"
     assert not (TMP_DIR / "out" / "style_profiles").exists(), f"全局 style_profiles/ 不应创建: {TMP_DIR / 'out' / 'style_profiles'}"
     print("[OK] Test 6: analyze_docx_style_samples → session_workspace/style_profiles/")
 
@@ -211,13 +212,10 @@ def test_dispatcher_injects_session_id_for_session_tools():
 
 
 def test_dispatcher_skips_non_session_tools():
-    """Test 9: 非 SESSION_TOOLS 工具 (bind_styles_to_roles) 不被注入 session_id (验证白名单精确)"""
-    # bind_styles_to_roles 是 style profile 工具, 尚未沙箱化, 不在 SESSION_TOOLS
-    # 用它验证 dispatcher 不会乱注入
-    name = "bind_styles_to_roles"
-    assert name not in agent.SESSION_TOOLS, f"{name} 不应在 SESSION_TOOLS 集合中 (尚未沙箱化)"
-    # 即使 LLM 传了 session_id, dispatcher 也不该管
-    print("[OK] Test 9: 非 SESSION_TOOLS (bind_styles_to_roles) 不被 dispatcher 注入 session_id")
+    """Test 9: 非 SESSION_TOOLS 工具 (如 dummy_tool) 不被注入 session_id (验证白名单精确)"""
+    name = "dummy_non_session_tool"
+    assert name not in agent.SESSION_TOOLS, f"{name} 不应在 SESSION_TOOLS 集合中"
+    print("[OK] Test 9: 非 SESSION_TOOLS (dummy_non_session_tool) 不被 dispatcher 注入 session_id")
 
 
 def test_markdown_to_word_accepts_session_id():
