@@ -12,6 +12,7 @@ import ChatHeader from "../components/chat-header";
 import ChatMessageBlocks from "../components/chat-message-blocks";
 import ApprovalCheckpoint from "../components/approval-checkpoint";
 import ChatInput from "../components/chat-input";
+import WorkspacePanel, { type WorkspaceFile } from "../components/workspace-panel";
 // v2: 删 IndexedDB lib/sessions — 改用 HTTP fetch + WS resume (后端是 source of truth)
 import type { SessionMeta } from "../lib/session-types";
 import type { DraftFile } from "../lib/draft-types";
@@ -27,6 +28,12 @@ export default function Home() {
   const [showPreview, setShowPreview] = useState<boolean>(false);
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
+
+  // === v2 (Phase 4): 文件工作区 (上传 / 选 active docx / 删除) ===
+  const [showWorkspace, setShowWorkspace] = useState<boolean>(false);
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
+  const [activeDocxName, setActiveDocxName] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
   // === 会话管理 (v2: 后端持久化, 前端只维护"当前激活的 session_id") ===
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -133,6 +140,69 @@ export default function Home() {
     setDraftFiles([]);
     setActiveFilename(null);
   };
+
+  // === v2 (Phase 4): Workspace 文件工作区 — 拉取/上传/删除/设 active ===
+  const fetchWorkspace = async (sessionId: string) => {
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/workspace`);
+      if (res.ok) {
+        const data: { files: WorkspaceFile[] } = await res.json();
+        setWorkspaceFiles(data.files);
+      } else {
+        console.warn("fetchWorkspace failed:", res.status);
+        setWorkspaceFiles([]);
+      }
+    } catch (e) {
+      console.warn("fetchWorkspace error:", e);
+      setWorkspaceFiles([]);
+    }
+  };
+
+  const uploadToWorkspace = async (sessionId: string, file: File) => {
+    const formData = new FormData();
+    formData.append("files", file);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `upload failed: ${res.status}`);
+    }
+    await fetchWorkspace(sessionId);
+  };
+
+  const deleteFromWorkspace = async (sessionId: string, name: string) => {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+    if (!res.ok && res.status !== 404) {
+      console.warn("deleteWorkspaceFile failed:", res.status);
+    }
+    await fetchWorkspace(sessionId);
+    // 删的是 active docx, 清除 active 状态
+    setActiveDocxName((prev) => (prev === name ? null : prev));
+  };
+
+  const setActiveDocx = (name: string) => {
+    setActiveDocxName(name);
+  };
+
+  // workspace 打开时自动拉一次
+  useEffect(() => {
+    if (showWorkspace && currentSessionId) {
+      void fetchWorkspace(currentSessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showWorkspace, currentSessionId]);
+
+  // 切换会话时清空 workspace
+  useEffect(() => {
+    setWorkspaceFiles([]);
+    setActiveDocxName(null);
+  }, [currentSessionId]);
 
   // === v2: 切会话 = 关闭旧 WS + 通过 resume 拉新 (Bug B 完整修复) ===
   const handleSelectSession = (id: string) => {
@@ -293,6 +363,8 @@ export default function Home() {
         hasDraftFiles={draftFiles.length > 0}
         showPreview={showPreview}
         sidebarOpen={sessionSidebarOpen}
+        showWorkspace={showWorkspace}
+        workspaceFileCount={workspaceFiles.length}
         currentSessionId={currentSessionId}
         streamMode={streamMode}
         onToggleSidebar={() => {
@@ -308,6 +380,7 @@ export default function Home() {
           }
           setShowPreview((v) => !v);
         }}
+        onToggleWorkspace={() => setShowWorkspace((v) => !v)}
         onResetWorkspace={handleCreateSession}
         onToggleStreamMode={() => sendSetStreamMode(!streamMode)}
       />
@@ -396,6 +469,28 @@ export default function Home() {
           activeFilename={activeFilename}
           onSelectFile={setActiveFilename}
           onClose={() => setShowPreview(false)}
+        />
+        {/* v2 (Phase 4): Workspace 文件工作区面板 (与 PreviewPanel 同 slot, 互斥) */}
+        <WorkspacePanel
+          show={showWorkspace}
+          files={workspaceFiles}
+          activeDocxName={activeDocxName}
+          isUploading={isUploading}
+          onSelectDocx={setActiveDocx}
+          onUpload={async (file: File) => {
+            if (!currentSessionId) return;
+            setIsUploading(true);
+            try {
+              await uploadToWorkspace(currentSessionId, file);
+            } finally {
+              setIsUploading(false);
+            }
+          }}
+          onDelete={async (name: string) => {
+            if (!currentSessionId) return;
+            await deleteFromWorkspace(currentSessionId, name);
+          }}
+          onClose={() => setShowWorkspace(false)}
         />
       </div>
     </div>

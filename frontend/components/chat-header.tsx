@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, FolderUp } from "lucide-react";
 
 interface ChatHeaderProps {
   docxPath: string;
@@ -9,17 +9,20 @@ interface ChatHeaderProps {
   hasDraftFiles: boolean;
   showPreview: boolean;
   sidebarOpen: boolean;
+  showWorkspace: boolean;
+  workspaceFileCount: number;
   currentSessionId: string | null;
   streamMode: boolean;
   onToggleSidebar: () => void;
   onTogglePreview: () => void;
+  onToggleWorkspace: () => void;
   onResetWorkspace: () => void;
   onToggleStreamMode: () => void;
 }
 
 // === ChatHeader: 顶部 Header Bar ===
 // 左侧: 会话管理按钮 + 标题 + docxPath 路径徽章
-// 右侧: 连接状态点 + token 进度条 + 流式/非流式切换 + 草稿切换 + 重置按钮
+// 右侧: 连接状态点 + token 进度条 + 流式/非流式切换 + 草稿切换 + 文件 + 重置按钮
 export default function ChatHeader({
   docxPath,
   isConnected,
@@ -27,10 +30,13 @@ export default function ChatHeader({
   hasDraftFiles,
   showPreview,
   sidebarOpen,
+  showWorkspace,
+  workspaceFileCount,
   currentSessionId,
   streamMode,
   onToggleSidebar,
   onTogglePreview,
+  onToggleWorkspace,
   onResetWorkspace,
   onToggleStreamMode,
 }: ChatHeaderProps) {
@@ -81,11 +87,7 @@ export default function ChatHeader({
           </div>
         )}
 
-        {/* v2: 流式 / 非流式 切换按钮 (SenseNova SSE stall 修复)
-            双职责:
-            1. 当前会话模式: 切了之后下一轮 step() 用新模式
-            2. 新会话默认模式: 点击"新建会话"后启动时用当前 toggle 状态
-               (resetForCreate 不重置 streamMode, 让用户能预设) */}
+        {/* v2: 流式 / 非流式 切换按钮 (SenseNova SSE stall 修复) */}
         <button
           onClick={onToggleStreamMode}
           title={streamMode
@@ -100,6 +102,22 @@ export default function ChatHeader({
           <span className={`w-1.5 h-1.5 rounded-full ${streamMode ? "bg-indigo-500" : "bg-amber-500"}`} />
           {streamMode ? "流式" : "非流式"}
         </button>
+
+        {/* v2 (Phase 4): 文件工作区切换按钮 — 上传 docx / 选 active / 删 */}
+        {currentSessionId && (
+          <button
+            onClick={onToggleWorkspace}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold border rounded transition-colors cursor-pointer ${
+              showWorkspace
+                ? "border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
+                : "border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400"
+            }`}
+            title="上传/管理文件"
+          >
+            <FolderUp className="w-3.5 h-3.5" />
+            文件 {workspaceFileCount > 0 && `(${workspaceFileCount})`}
+          </button>
+        )}
 
         {hasDraftFiles && (
           <button

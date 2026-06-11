@@ -283,3 +283,37 @@ def resolve_docx_io(session_id: str, docx_path: str, output_path: str):
 **回归**: 222 passed, 1 skipped
 
 ---
+
+## 阶段 4: 前端 WorkspacePanel + ChatHeader + page.tsx (待 commit)
+
+**做了什么**: 前端加 WorkspacePanel 文件工作区 UI(镜像 PreviewPanel 的 slide-over 模式),允许用户上传 .docx / .zip / .png 等文件,选择 active docx,删除文件。
+
+**新增/修改**:
+
+| 文件 | 改动 |
+|---|---|
+| `frontend/components/workspace-panel.tsx` (新) | 镜像 `preview-panel.tsx` 风格, AnimatePresence + motion.div width 0↔50%; 空态显示 dashed drop zone (拖拽 + 点击); 非空显示文件列表 (radio 选 active + trash 删); 二次点击 trash 才真删 (5s 自动取消 confirm) |
+| `frontend/components/chat-header.tsx` | 加 "文件 (N)" 按钮 (仅 currentSessionId 非空时显示), 接收 `showWorkspace` / `workspaceFileCount` / `onToggleWorkspace` props |
+| `frontend/app/page.tsx` | 新增 `showWorkspace` / `workspaceFiles` / `activeDocxName` / `isUploading` state; 新增 `fetchWorkspace` / `uploadToWorkspace` / `deleteFromWorkspace` / `setActiveDocx` handlers; 集成 WorkspacePanel 在右侧 (与 PreviewPanel 同 slot 互斥) |
+
+**关键设计**:
+
+- **slide-over 模式**: WorkspacePanel 和 PreviewPanel 共用右侧 slot,互斥显示 (两个 show 状态独立 toggle)
+- **active docx 选择**: 选 radio 只能选 .docx 文件 (其他文件类型 disabled, 提示"非 .docx 文件, 不可设为主文档")
+- **上传 UI**: 顶部固定 "上传文件" 按钮 + 空态时大块 drop zone (拖拽 / 点击); `.zip` 上传提示"自动解压到子目录"
+- **删除二次确认**: 第一次点 trash 变红, 5s 内第二次才真删 (避免误删)
+- **后端 API 端点**:
+  - `GET /api/sessions/{id}/workspace` 拉文件列表
+  - `POST /api/sessions/{id}/upload` multipart 上传
+  - `DELETE /api/sessions/{id}/workspace/{filename}` 删除单文件
+
+**未在本 phase 实现** (按 plan 留 future):
+- 在新建会话时主动用 workspace 中的 .docx 作为 start 消息的 `workspaceDocxName` (Phase 5 / 后续 phase)
+- WS `set_active_docx` 消息 (用户提的 "active 中途切换" 也是 Phase 1 decision 中留 future)
+- `use-agent-session.ts` 暂未改 (start 签名 + workspaceDocxName 在下个 phase 加)
+
+**TypeScript 验证**: `npx tsc --noEmit` 通过 (EXIT 0)
+
+**回归**: TypeScript 0 错误 (前端测试由 Phase 5 覆盖)
+
+---
