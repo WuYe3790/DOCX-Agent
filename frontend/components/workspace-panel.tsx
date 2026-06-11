@@ -1,14 +1,34 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FolderUp, X, Upload, FileText, Trash2, Check } from "lucide-react";
+import {
+  FolderUp,
+  X,
+  Upload,
+  FileText,
+  Trash2,
+  Check,
+  Folder,
+  FolderOpen,
+  ChevronRight,
+  ChevronDown
+} from "lucide-react";
 
 export interface WorkspaceFile {
   name: string;
   path: string;  // 相对 workspace 的正斜杠路径
   size: number;
   mtime: number;
+}
+
+export interface FileNode {
+  name: string;
+  path: string;  // 相对 workspace 的完整 POSIX 路径
+  type: "file" | "directory";
+  children?: FileNode[];
+  size?: number;
+  mtime?: number;
 }
 
 interface WorkspacePanelProps {
@@ -23,14 +43,62 @@ interface WorkspacePanelProps {
 }
 
 /**
- * 侧边栏文件工作区面板
- * - show=true 时宽度从 0 平滑展开至 50%; show=false 时收缩回 0
- * - 文件为空时显示 dashed drop zone (拖拽 / 点击上传)
- * - 文件非空时显示文件列表 (radio 选 active docx + trash 删除)
- * - 与 PreviewPanel 互斥显示在右侧 slot
- *
- * Phase 4 实现: 前端 WorkspacePanel — 上传 .docx / 选 active docx / 删除
- * 后端 API 详见 src/workspace/api.py
+ * 递归构建目录树
+ */
+function buildFileTree(files: WorkspaceFile[]): FileNode[] {
+  const root: FileNode[] = [];
+
+  files.forEach((file) => {
+    const parts = file.path.split("/");
+    let currentLevel = root;
+
+    parts.forEach((part, index) => {
+      const isLast = index === parts.length - 1;
+      const pathSoFar = parts.slice(0, index + 1).join("/");
+
+      let existingNode = currentLevel.find((node) => node.name === part);
+
+      if (!existingNode) {
+        existingNode = {
+          name: part,
+          path: pathSoFar,
+          type: isLast ? "file" : "directory",
+          children: isLast ? undefined : [],
+        };
+        if (isLast) {
+          existingNode.size = file.size;
+          existingNode.mtime = file.mtime;
+        }
+        currentLevel.push(existingNode);
+      }
+
+      if (existingNode.children) {
+        currentLevel = existingNode.children;
+      }
+    });
+  });
+
+  // 文件夹排在前面，文件排在后面，按名称排序
+  const sortTree = (nodes: FileNode[]) => {
+    nodes.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === "directory" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach((node) => {
+      if (node.children) {
+        sortTree(node.children);
+      }
+    });
+  };
+
+  sortTree(root);
+  return root;
+}
+
+/**
+ * 侧边栏文件工作区面板 (VS Code 树形管理器风格)
  */
 export default function WorkspacePanel({
   show,
@@ -45,6 +113,9 @@ export default function WorkspacePanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+
+  const fileTree = useMemo(() => buildFileTree(files), [files]);
 
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
@@ -54,7 +125,6 @@ export default function WorkspacePanel({
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      // 重置 input value 以便能重复选同一文件
       e.target.value = "";
       try {
         await onUpload(file);
@@ -82,18 +152,127 @@ export default function WorkspacePanel({
 
   const handleDeleteClick = useCallback(
     (name: string) => {
-      // 第一次点击进入 confirm 状态, 第二次(同 session 内)才真删
       if (confirmDelete === name) {
         setConfirmDelete(null);
         void onDelete(name);
       } else {
         setConfirmDelete(name);
-        // 5 秒后自动取消 confirm
         setTimeout(() => setConfirmDelete(null), 5000);
       }
     },
     [confirmDelete, onDelete],
   );
+
+  const toggleFolder = useCallback((path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
+  // 递归渲染树形目录项
+  const renderNode = (node: FileNode, level: number = 0) => {
+    const isDir = node.type === "directory";
+    const isExpanded = expandedPaths.has(node.path);
+
+    if (isDir) {
+      return (
+        <div key={node.path} className="space-y-0.5">
+          {/* 文件夹行 */}
+          <div
+            onClick={() => toggleFolder(node.path)}
+            className="group flex items-center gap-1.5 py-1 px-2 rounded hover:bg-slate-100/70 dark:hover:bg-zinc-800/40 border border-transparent cursor-pointer transition-colors select-none"
+            style={{ paddingLeft: `${Math.max(4, level * 14 + 4)}px` }}
+          >
+            <span className="text-slate-400 dark:text-zinc-500 shrink-0">
+              {isExpanded ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5" />
+              )}
+            </span>
+            <span className="text-indigo-400 dark:text-indigo-500 shrink-0">
+              {isExpanded ? (
+                <FolderOpen className="w-4 h-4" />
+              ) : (
+                <Folder className="w-4 h-4" />
+              )}
+            </span>
+            <span className="text-[12.5px] font-mono text-slate-700 dark:text-zinc-300 truncate">
+              {node.name}
+            </span>
+          </div>
+
+          {/* 子文件夹/文件列表 */}
+          {isExpanded && node.children && (
+            <div className="space-y-0.5">
+              {node.children.map((child) => renderNode(child, level + 1))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 文件行
+    const isActive = activeDocxName === node.name;
+    const isConfirming = confirmDelete === node.name;
+    const isDocx = node.name.toLowerCase().endsWith(".docx");
+
+    return (
+      <div
+        key={node.path}
+        className={`group flex items-center gap-2.5 px-2 py-1.5 rounded transition-all ${
+          isActive
+            ? "bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-200/50 dark:border-indigo-800/40"
+            : "hover:bg-slate-100/70 dark:hover:bg-zinc-800/40 border border-transparent"
+        }`}
+        style={{ paddingLeft: `${Math.max(8, level * 14 + 18)}px` }}
+      >
+        {/* radio 选 active docx (仅 .docx 启用) */}
+        <button
+          onClick={() => onSelectDocx(node.name)}
+          disabled={!isDocx}
+          className={`shrink-0 w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-colors ${
+            isActive
+              ? "border-indigo-500 bg-indigo-500 text-white"
+              : isDocx
+              ? "border-slate-300 dark:border-zinc-600 hover:border-indigo-400 cursor-pointer"
+              : "border-slate-200 dark:border-zinc-700 opacity-20 cursor-not-allowed"
+          }`}
+          aria-label={`选中 ${node.name} 为主文档`}
+          title={isDocx ? "设为主文档" : "非 .docx 文件"}
+        >
+          {isActive && <Check className="w-2.5 h-2.5 text-white stroke-[3px]" />}
+        </button>
+        <FileText className="w-3.5 h-3.5 text-slate-400 dark:text-zinc-500 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[12.5px] font-mono text-slate-800 dark:text-zinc-200 truncate" title={node.path}>
+            {node.name}
+          </div>
+        </div>
+        <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono shrink-0 select-none opacity-60 group-hover:opacity-0 group-hover:w-0 transition-all overflow-hidden">
+          {node.size !== undefined ? (node.size / 1024).toFixed(1) : 0} KB
+        </div>
+        <button
+          onClick={() => handleDeleteClick(node.name)}
+          className={`shrink-0 p-1 rounded transition-colors hidden group-hover:flex ${
+            isConfirming
+              ? "bg-rose-500 text-white hover:bg-rose-600"
+              : "text-slate-400 dark:text-zinc-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 hover:text-rose-500"
+          }`}
+          aria-label={isConfirming ? "再次点击确认删除" : "删除"}
+          title={isConfirming ? "再次点击确认删除" : "删除"}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  };
 
   return (
     <AnimatePresence initial={false}>
@@ -151,8 +330,8 @@ export default function WorkspacePanel({
               />
             </div>
 
-            {/* 主体: 空态 (drop zone) OR 文件列表 */}
-            <div className="flex-1 overflow-y-auto p-4">
+            {/* 主体: 空态 (drop zone) OR 文件列表树 */}
+            <div className="flex-1 overflow-y-auto p-3">
               {files.length === 0 ? (
                 <div
                   onDragOver={(e) => {
@@ -179,60 +358,8 @@ export default function WorkspacePanel({
                   </p>
                 </div>
               ) : (
-                <div className="space-y-1.5">
-                  {files.map((file) => {
-                    const isActive = activeDocxName === file.name;
-                    const isConfirming = confirmDelete === file.name;
-                    return (
-                      <div
-                        key={file.path}
-                        className={`group flex items-center gap-3 px-3 py-2 rounded-md transition-colors ${
-                          isActive
-                            ? "bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800"
-                            : "hover:bg-slate-50 dark:hover:bg-zinc-800/50 border border-transparent"
-                        }`}
-                      >
-                        {/* radio 选 active docx (仅 .docx 启用) */}
-                        <button
-                          onClick={() => onSelectDocx(file.name)}
-                          disabled={!file.name.toLowerCase().endsWith(".docx")}
-                          className={`shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
-                            isActive
-                              ? "border-indigo-500 bg-indigo-500"
-                              : file.name.toLowerCase().endsWith(".docx")
-                              ? "border-slate-300 dark:border-zinc-600 hover:border-indigo-400 cursor-pointer"
-                              : "border-slate-200 dark:border-zinc-700 opacity-40 cursor-not-allowed"
-                          }`}
-                          aria-label={`选中 ${file.name} 为主文档`}
-                          title={file.name.toLowerCase().endsWith(".docx") ? "设为主文档" : "非 .docx 文件, 不可设为主文档"}
-                        >
-                          {isActive && <Check className="w-2.5 h-2.5 text-white" />}
-                        </button>
-                        <FileText className="w-4 h-4 text-slate-400 dark:text-zinc-500 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-mono truncate" title={file.path}>
-                            {file.name}
-                          </div>
-                          <div className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono">
-                            {(file.size / 1024).toFixed(1)} KB
-                            {file.path.includes("/") && ` · ${file.path}`}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteClick(file.name)}
-                          className={`shrink-0 p-1.5 rounded-md transition-colors ${
-                            isConfirming
-                              ? "bg-rose-500 text-white"
-                              : "text-slate-400 dark:text-zinc-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 hover:text-rose-500"
-                          }`}
-                          aria-label={isConfirming ? "再次点击确认删除" : "删除文件"}
-                          title={isConfirming ? "再次点击确认删除" : "删除"}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
+                <div className="space-y-0.5">
+                  {fileTree.map((node) => renderNode(node, 0))}
                 </div>
               )}
             </div>
@@ -242,3 +369,4 @@ export default function WorkspacePanel({
     </AnimatePresence>
   );
 }
+

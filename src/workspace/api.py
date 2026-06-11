@@ -419,6 +419,8 @@ async def list_workspace(session_id: str):
         try:
             stat = entry.stat()
             rel = entry.relative_to(workspace).as_posix()
+            if rel.startswith(("unzipped/", "style_profiles/", "drafts/")):
+                continue
             files.append({
                 "name": entry.name,
                 "path": rel,  # 相对 workspace 的正斜杠路径
