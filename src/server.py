@@ -164,7 +164,7 @@ async def api_list_session_drafts(session_id: str):
         raise HTTPException(status_code=400, detail="非法 session_id (越界)")
     if not session_dir.exists():
         return {"files": []}
-    drafts_dir = session_dir / "drafts"
+    drafts_dir = session_dir / "workspace" / "drafts"
     if not drafts_dir.exists():
         return {"files": []}
     # 3. 遍历 *.md

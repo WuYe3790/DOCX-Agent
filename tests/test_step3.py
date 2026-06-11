@@ -130,10 +130,10 @@ def test_get_session_nonexistent_returns_404():
 def test_delete_session_existing_removes_directory():
     """Test 5: DELETE /api/sessions/{id} 存在 → 200 + 目录真没了 (含子目录)"""
     session_dir = _make_fake_session("session-to-delete")
-    (session_dir / "drafts").mkdir()
-    (session_dir / "drafts" / "test.md").write_text("# test", encoding="utf-8")
-    (session_dir / "uploads").mkdir()
-    (session_dir / "uploads" / "test.docx").write_bytes(b"fake")
+    (session_dir / "workspace" / "drafts").mkdir(parents=True, exist_ok=True)
+    (session_dir / "workspace" / "drafts" / "test.md").write_text("# test", encoding="utf-8")
+    (session_dir / "workspace").mkdir(parents=True, exist_ok=True)
+    (session_dir / "workspace" / "test.docx").write_bytes(b"fake")
     assert session_dir.exists()
 
     resp = client.delete("/api/sessions/session-to-delete")
@@ -141,8 +141,8 @@ def test_delete_session_existing_removes_directory():
     assert resp.json()["status"] == "ok"
     assert not session_dir.exists(), "目录应该被级联删除"
     # 草稿和上传也应该没了
-    assert not (session_dir / "drafts").exists()
-    print("[OK] Test 5: DELETE /api/sessions/{id} → 目录级联删除 (含 drafts/ / uploads/)")
+    assert not (session_dir / "workspace" / "drafts").exists()
+    print("[OK] Test 5: DELETE /api/sessions/{id} → 目录级联删除 (含 workspace/drafts/)")
 
 
 def test_delete_session_nonexistent_idempotent():
