@@ -1,0 +1,313 @@
+"""v2: Workspace HTTP endpoints — 上传 / 列表 / 删除 / 清空
+
+挂载到 src/server.py: app.include_router(workspace_router, prefix="/api/sessions")
+
+设计:
+- 上传: multipart/form-data, file 字段可重复;支持 .docx/.png/.md/.zip 等白名单
+- 列表: GET /{session_id}/workspace, 排序 (mtime, name) 稳定 tuple
+- 删除: DELETE /{session_id}/workspace/{filename}
+- 清空: POST /{session_id}/workspace/clear
+
+env flag: WORKSPACE_UPLOAD_ENABLED=false 时所有写端点返回 503
+"""
+
+import os
+import shutil
+import tempfile
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from . import guard
+from .errors import BadUpload
+from .guard import (
+    ALLOWED_EXTENSIONS,
+    MAX_FILE_BYTES,
+    QUOTA_BYTES,
+    safe_workspace_filename,
+    unique_workspace_target,
+    workspace_dir,
+)
+
+router = APIRouter(tags=["workspace"])
+
+# === Magic bytes 校验白名单 (仅压缩格式强制) ===
+_MAGIC_BYTES_EXTENSIONS = {".docx", ".zip", ".xlsx", ".pptx"}
+_MAGIC_BYTES_PK = b"PK\x03\x04"
+# 读前 N 字节做魔数检查就够
+_MAGIC_CHECK_BYTES = 4
+
+# === env flag: 上传功能总开关 ===
+def _upload_enabled() -> bool:
+    return os.environ.get("WORKSPACE_UPLOAD_ENABLED", "true").lower() != "false"
+
+
+def _session_exists(session_id: str) -> bool:
+    """session 是否存在 (有 metadata.json 即视为存在)
+
+    注意: 不复制 guard.WORKSPACE_ROOT 到本地变量, 而是通过 guard.WORKSPACE_ROOT
+    每次访问 — 这样测试可以 patch guard.WORKSPACE_ROOT 实时生效
+    """
+    from .guard import validate_session_id
+    try:
+        validate_session_id(session_id)
+    except Exception:
+        return False
+    return (guard.WORKSPACE_ROOT / session_id / "metadata.json").exists()
+
+
+def _workspace_size_bytes(workspace: Path) -> int:
+    """累加 workspace 内所有文件大小 (递归)"""
+    total = 0
+    for entry in workspace.rglob("*"):
+        if entry.is_file():
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _check_upload_constraints(
+    extension: str,
+    file_size: int,
+    workspace: Path,
+) -> None:
+    """上传前约束检查: 扩展名 / 单文件大小 / session quota
+
+    Raises:
+        HTTPException(400/413/507)
+    """
+    if extension.lower() not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {extension!r}. 支持: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+    if file_size > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大: {file_size} B > {MAX_FILE_BYTES} B ({MAX_FILE_BYTES // 1024 // 1024} MB)",
+        )
+    current = _workspace_size_bytes(workspace)
+    if current + file_size > QUOTA_BYTES:
+        raise HTTPException(
+            status_code=507,
+            detail=f"session quota 不足: 当前 {current} B + 上传 {file_size} B > {QUOTA_BYTES} B ({QUOTA_BYTES // 1024 // 1024} MB)",
+        )
+
+
+def _check_magic_bytes(extension: str, head_bytes: bytes) -> None:
+    """仅对压缩格式做魔数校验, 普通文件 (.md/.txt/.png) 跳过
+
+    v1 设计: 只校验 zip 魔数, 图片不强制 PNG/JPEG 头 (避免误伤 v1)
+    """
+    if extension.lower() in _MAGIC_BYTES_EXTENSIONS:
+        if not head_bytes.startswith(_MAGIC_BYTES_PK):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{extension} 文件不是有效的 zip 容器 (魔数 {head_bytes[:4]!r} != PK\\x03\\x04)",
+            )
+
+
+# === POST /upload ===
+
+@router.post("/{session_id}/upload", status_code=201)
+async def upload_to_workspace(session_id: str, files: List[UploadFile] = File(...)):
+    """上传文件到 session workspace
+
+    Body: multipart/form-data, field name = 'files' (可重复)
+    Response 201: {uploaded: [{filename, path, size, uploaded_at}], total_files, total_bytes}
+    """
+    if not _upload_enabled():
+        raise HTTPException(status_code=503, detail="WORKSPACE_UPLOAD_ENABLED=false")
+
+    if not _session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
+
+    workspace = workspace_dir(session_id)  # 自动 mkdir
+    uploaded_results = []
+    uploaded_files: List[tuple] = []  # 跟踪已上传的 tmp 文件, 失败时回滚
+
+    for upload in files:
+        try:
+            # 1) 清洗文件名
+            try:
+                clean_name = safe_workspace_filename(upload.filename or "unnamed")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"非法文件名 {upload.filename!r}: {e.user_message if hasattr(e, 'user_message') else str(e)}")
+
+            ext = Path(clean_name).suffix.lower()
+            # 注意: .zip 走流式解压通道 (Phase 2b 实现);v1 先按普通文件保存
+            # 这里保留 .zip 通过 ALLOWED_EXTENSIONS, 实际解压逻辑下个 phase 加
+
+            # 2) 流式读 + 大小限制
+            tmp_path: Optional[Path] = None
+            try:
+                # 用系统 temp dir 而非 workspace 内的 tmp 路径
+                # 原因: 配额检查时 _workspace_size_bytes 算的是 workspace 内文件,
+                #       如果 tmp 也在 workspace, 会重复计数 (tmp 自身 + 新增 file_size)
+                tmp_fd, tmp_str = tempfile.mkstemp(prefix="ws_upload_", suffix=".tmp")
+                tmp_path = Path(tmp_str)
+                total_written = 0
+                head_bytes = b""
+                with os.fdopen(tmp_fd, "wb") as f:
+                    while True:
+                        chunk = await upload.read(1024 * 64)
+                        if not chunk:
+                            break
+                        total_written += len(chunk)
+                        if total_written > MAX_FILE_BYTES:
+                            f.close()
+                            tmp_path.unlink(missing_ok=True)
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"文件过大: 超过 {MAX_FILE_BYTES} B 上限 (中途终止)",
+                            )
+                        if len(head_bytes) < _MAGIC_CHECK_BYTES:
+                            need = _MAGIC_CHECK_BYTES - len(head_bytes)
+                            head_bytes += chunk[:need]
+                        f.write(chunk)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass  # Windows 上 fsync 在某些 fs 上可能不支持
+
+                # 3) 配额检查 (tmp 不在 workspace, 计数准确)
+                _check_upload_constraints(ext, total_written, workspace)
+                # 4) 魔数校验
+                with open(tmp_path, "rb") as f:
+                    real_head = f.read(_MAGIC_CHECK_BYTES)
+                _check_magic_bytes(ext, real_head)
+
+                # 5) 原子改名到目标 (unique_workspace_target 处理重名)
+                target = unique_workspace_target(workspace, clean_name)
+                # 用 shutil.move 而不是 os.replace, 因为 tmp 和 target 可能在不同盘
+                # (Windows: 跨盘 os.replace 会失败)
+                shutil.move(str(tmp_path), str(target))
+                tmp_path = None  # move 成功, 标记为不再清理
+                uploaded_files.append((target, total_written))
+
+                stat = target.stat()
+                uploaded_results.append({
+                    "filename": target.name,
+                    "path": target.name,  # 相对 workspace
+                    "size": stat.st_size,
+                    "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+                })
+            except HTTPException:
+                if tmp_path and tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+                raise
+            except Exception as e:
+                if tmp_path and tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail=f"上传失败: {e}")
+        finally:
+            await upload.close()
+
+    # 汇总
+    return {
+        "uploaded": uploaded_results,
+        "total_files": len(uploaded_results),
+        "total_bytes": sum(r["size"] for r in uploaded_results),
+    }
+
+
+# === GET /workspace ===
+
+@router.get("/{session_id}/workspace")
+async def list_workspace(session_id: str):
+    """列出 session workspace 内所有文件 (元数据, 不含内容)"""
+    if not _session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
+
+    workspace = workspace_dir(session_id)
+    files = []
+    for entry in sorted(
+        workspace.rglob("*"),
+        key=lambda p: (p.stat().st_mtime if p.exists() else 0, p.name),
+    ):
+        if not entry.is_file():
+            continue
+        try:
+            stat = entry.stat()
+            rel = entry.relative_to(workspace).as_posix()
+            files.append({
+                "name": entry.name,
+                "path": rel,  # 相对 workspace 的正斜杠路径
+                "size": stat.st_size,
+                "mtime": int(stat.st_mtime * 1000),
+            })
+        except (OSError, ValueError):
+            continue
+
+    return {
+        "files": files,
+        "total_files": len(files),
+        "total_bytes": sum(f["size"] for f in files),
+    }
+
+
+# === DELETE /workspace/{filename} ===
+
+@router.delete("/{session_id}/workspace/{filename}", status_code=204)
+async def delete_workspace_file(session_id: str, filename: str):
+    """删除 workspace 内单个文件"""
+    if not _upload_enabled():
+        raise HTTPException(status_code=503, detail="WORKSPACE_UPLOAD_ENABLED=false")
+
+    if not _session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
+
+    try:
+        clean_name = safe_workspace_filename(filename)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"非法文件名: {e.user_message if hasattr(e, 'user_message') else str(e)}")
+
+    workspace = workspace_dir(session_id)
+    target = workspace / clean_name
+    # 防越界: 解析后必须在 workspace 内
+    try:
+        target_resolved = target.resolve()
+        workspace_resolved = workspace.resolve()
+        if not target_resolved.is_relative_to(workspace_resolved):
+            raise HTTPException(status_code=400, detail="路径越界")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"路径解析失败: {e}")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {clean_name}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail=f"不是文件: {clean_name}")
+    target.unlink()
+    return None  # 204
+
+
+# === POST /workspace/clear ===
+
+@router.post("/{session_id}/workspace/clear", status_code=204)
+async def clear_workspace(session_id: str):
+    """清空 workspace (只删文件, 保留目录)
+
+    供前端"重置 workspace"按钮用
+    """
+    if not _upload_enabled():
+        raise HTTPException(status_code=503, detail="WORKSPACE_UPLOAD_ENABLED=false")
+
+    if not _session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
+
+    workspace = workspace_dir(session_id)
+    for entry in workspace.rglob("*"):
+        if entry.is_file():
+            try:
+                entry.unlink()
+            except OSError:
+                continue
+    return None

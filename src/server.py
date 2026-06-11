@@ -21,6 +21,7 @@ from docx_tools.analyze_docx_style_samples import analyze_docx_style_samples
 from md_tools.markdown_to_word import markdown_to_word
 from docx_tools.diff_docx import diff_docx
 from agent import Agent, SYSTEM_PROMPT, create_log_file, append_log
+from workspace.api import router as workspace_router  # v2: 上传 / 列表 / 删除 endpoints
 
 app = FastAPI(title="DOCX-Agent Backend API", version="1.0.0")
 
@@ -31,6 +32,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# v2: 挂载 workspace 路由 (上传 / 列表 / 删除 / 清空)
+# prefix 决定 endpoints 形式: /api/sessions/{id}/upload 等
+app.include_router(workspace_router, prefix="/api/sessions")
 
 SESSIONS_ROOT = Path("out/sessions")  # v2: 每个 session 一个目录 (含 drafts/ / style_profiles/ / uploads/ 子目录)
 SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
