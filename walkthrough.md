@@ -378,3 +378,46 @@ npm run dev
 **回归**: 234 passed, 1 skipped
 
 ---
+
+---
+
+## 全部完成总结
+
+**11 个 phase 全部 commit 完毕**, 共 14 个 commit 在 `feature/workspace-sandbox` 分支。
+
+### 总览
+
+| Phase | 内容 | commit | 测试 |
+|---|---|---|---|
+| 0 | 切分支 + 工作纪律 | (HEAD~14) | — |
+| 1 | 路径解析层 | `df1b658` | 37 新 + 138 旧 |
+| 2a | Upload HTTP endpoints | `a522adb` | 28 新 |
+| 2b | zip 流式解压 + 双重防御 | `720d130` | 9 新 |
+| 3a | basic_tools 沙箱化 | `f4e87f2` | 0 新 (改 4 工具) |
+| 3b | md_tools 沙箱化 + draft_path 重构 | `c122b6b` | 0 新 (改 7 文件) |
+| 3c | docx_tools 读类沙箱化 | `9b419e1` | 0 新 (改 4 工具) |
+| 3c 修复 | read_docx_structure 函数体实际沙箱 | `1b28f36` | (e2e 发现) |
+| 3d | docx_tools 写入类沙箱化 (19 工具) | `edca4b1` | 0 新 (batch 改 19 工具) |
+| 3d 文档 | walkthrough 补 | `1d98c5f` | — |
+| 3e | unzip_docx 沙箱化 (最高风险) | `aefd23a` | 10 新 |
+| 4 | 前端 WorkspacePanel | `8f287c4` | tsc 0 错误 |
+| 5 | 端到端 e2e 测试 | (含在 1b28f36) | 12 新 |
+
+### 最终回归
+**234 passed, 1 skipped** (symlink test 在 Windows 上需 admin/developer mode)
+
+### 关键设计原则落地
+- **集中守卫**: `resolve_workspace_path` 是唯一入口, 30+ 工具走它
+- **SESSION_TOOLS 集合**: dispatcher 反射调前自动注入 `session_id`, LLM 看不到
+- **纵深防御**: 文件名黑名单 → 绝对路径检测 → .. 段检测 → resolve 后 is_relative_to → symlink 检测
+- **原子写盘**: temp + fsync + shutil.move 跨盘兼容
+- **zip bomb 防御**: 流式累加字节数 + 单 entry 比例检查 + rmtree 回滚
+- **overwrite 不打断 Agent**: unzip_docx 旧目录自动加时间戳后缀备份
+
+### 未实现 (按 plan 留 future)
+- WS `set_active_docx` 消息 (中途切换 active docx)
+- 启动时 `start` 消息带 `workspaceDocxName` (use-agent-session.ts 暂未改)
+- `bind_styles_to_roles` / style profile 工具未沙箱化 (少数辅助工具)
+
+### 手动 smoke 测试步骤
+参见 Phase 5 章节 "手动 smoke 测试"。
