@@ -45,7 +45,13 @@ export default function MarkdownRenderer({ content, sessionId }: MarkdownRendere
               sessionId
             ) {
               const cleanSrc = src.startsWith("/") ? src.slice(1) : src;
-              resolvedSrc = `/api/sessions/${encodeURIComponent(sessionId)}/workspace/file/${encodeURIComponent(cleanSrc)}`;
+              // 避免二次编码，且只对文件名段进行编码，保留路径中的斜杠 '/'
+              const decodedSrc = decodeURIComponent(cleanSrc);
+              const encodedPath = decodedSrc
+                .split("/")
+                .map((segment) => encodeURIComponent(segment))
+                .join("/");
+              resolvedSrc = `/api/sessions/${encodeURIComponent(sessionId)}/workspace/file/${encodedPath}`;
             }
 
             return (

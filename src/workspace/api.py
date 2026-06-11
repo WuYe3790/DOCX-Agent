@@ -448,18 +448,21 @@ async def get_workspace_file(session_id: str, filepath: str):
     if not _session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
 
+    from urllib.parse import unquote
+    filepath_decoded = unquote(filepath)
+
     try:
         # 使用统一的安全路径解析器
         target = guard.resolve_workspace_path(
             session_id,
-            filepath,
+            filepath_decoded,
             must_exist=True,
             must_be_file=True,
             allow_symlinks=False,
         )
     except guard.WorkspacePathError as e:
         if e.code == "not_found":
-            raise HTTPException(status_code=404, detail=f"文件不存在: {filepath}")
+            raise HTTPException(status_code=404, detail=f"文件不存在: {filepath_decoded}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"路径解析失败: {e}")
