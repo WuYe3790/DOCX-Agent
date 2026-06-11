@@ -9,6 +9,7 @@ except ModuleNotFoundError:
 from .apply_markdown_ir_after_paragraph import apply_markdown_ir_to_paragraph
 from .apply_markdown_ir_to_table_cell import apply_markdown_ir_to_table_cell
 from .common import json_result
+from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
 
 ACTION_GUIDE = """
