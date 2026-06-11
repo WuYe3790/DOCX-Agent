@@ -243,3 +243,43 @@ def resolve_docx_io(session_id: str, docx_path: str, output_path: str):
 **回归**: 212 passed, 1 skipped
 
 ---
+
+## 阶段 3e: unzip_docx 沙箱化 (最高风险, 待 commit)
+
+**做了什么**: `unzip_docx.py` 全重写, 路径沙箱化 + 多重防御。
+
+**关键改动**:
+- 函数签名加 `session_id: str` 作为第一参数
+- `docx_path` 走 resolver `must_exist=True, must_be_file=True`
+- `output_dir` 走 resolver `must_exist=False` **+ 强制父目录为 `workspace/unzipped/`** (LLM 只能传 `unzipped/run1`, 不能写到 workspace 根)
+- **不用 `extractall`**, 改用 `zipfile.open()` + `shutil.copyfileobj` 流式写
+- `overwrite=True` 策略: 把旧 `output_dir` 改名为 `output_dir_<timestamp>` 备份 (保 Agent 心流, 不断裂)
+- `overwrite=False` 旧行为: 已存在则 400
+
+**四重防御** (与 Phase 2b zip 流式解压同款):
+
+| 防御 | 实现 |
+|---|---|
+| zip slip | 拒绝 `..` 段 / 绝对路径 / UNC 路径 entry |
+| zip bomb (单 entry) | 拒绝压缩比 > 100:1 |
+| zip bomb (累加) | 累加解压后字节数, 超 `guard.QUOTA_BYTES` 拒绝 + rmtree 回滚 |
+| DOS | entry 数 > 10000 拒绝 |
+
+**关键修复**: 用 `sys.modules["workspace.guard"].QUOTA_BYTES` qualified 访问 (不是 import-time 复制), 让测试 `monkeypatch.setattr(guard, "QUOTA_BYTES", ...)` 实时生效
+
+**SESSION_TOOLS 扩展**: 31 → 32 (+ unzip_docx)
+
+**测试**: `tests/test_unzip_docx_sandbox.py` 10 个 case
+- 正常解压
+- zip slip `..` 段 / 绝对路径拒绝
+- output_dir 不在 unzipped/ 下拒绝
+- output_dir `..` 越界拒绝
+- output_dir 已存在 + overwrite=false 拒绝
+- overwrite=true 创建时间戳备份
+- 损坏 zip 拒绝
+- quota 超限回滚无残骸
+- 单 entry 高压缩比拒绝
+
+**回归**: 222 passed, 1 skipped
+
+---

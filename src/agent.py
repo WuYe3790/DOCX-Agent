@@ -56,6 +56,8 @@ SESSION_TOOLS = {
     "insert_paragraph_after_like_sample",
     "replace_table_cell_like_sample",
     "insert_image_after_paragraph",
+    # v2: unzip_docx 沙箱化 (Phase 3e)
+    "unzip_docx",
 }
 
 from openai import APITimeoutError, APIConnectionError, BadRequestError
