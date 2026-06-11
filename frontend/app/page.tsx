@@ -431,6 +431,7 @@ export default function Home() {
             isGenerating={isGenerating}
             selectedToolId={selectedToolId}
             onSelectTool={setSelectedToolId}
+            sessionId={currentSessionId}
           />
 
           {/* === 实时流式 AnimatedLivePanel === */}
@@ -472,6 +473,7 @@ export default function Home() {
           activeFilename={activeFilename}
           onSelectFile={setActiveFilename}
           onClose={() => setShowPreview(false)}
+          sessionId={currentSessionId}
         />
         {/* v2 (Phase 4): Workspace 文件工作区面板 (与 PreviewPanel 同 slot, 互斥) */}
         <WorkspacePanel

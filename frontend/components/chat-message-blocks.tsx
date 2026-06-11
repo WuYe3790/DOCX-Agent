@@ -11,6 +11,7 @@ interface ChatMessageBlocksProps {
   isGenerating: boolean;
   selectedToolId: string | null;
   onSelectTool: (id: string | null) => void;
+  sessionId?: string | null;
 }
 
 // === ChatMessageBlocks: 渲染 4 种类型化消息块 (user / reasoning / content / toolGroup) ===
@@ -21,6 +22,7 @@ export default function ChatMessageBlocks({
   isGenerating,
   selectedToolId,
   onSelectTool,
+  sessionId,
 }: ChatMessageBlocksProps) {
   return (
     <>
@@ -78,7 +80,7 @@ export default function ChatMessageBlocks({
                 key={block.id}
                 className={`text-[15px] text-slate-700 dark:text-zinc-200 leading-relaxed select-text ${marginClass}`}
               >
-                <MarkdownRenderer content={block.content!} />
+                <MarkdownRenderer content={block.content!} sessionId={sessionId} />
               </div>
             );
 

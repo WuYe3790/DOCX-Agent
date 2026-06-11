@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from . import guard
 from .errors import BadUpload
@@ -439,6 +440,38 @@ async def list_workspace(session_id: str):
         "total_files": len(files),
         "total_bytes": sum(f["size"] for f in files),
     }
+
+
+@router.get("/{session_id}/workspace/file/{filepath:path}")
+async def get_workspace_file(session_id: str, filepath: str):
+    """获取 workspace 内单个文件的二进制流内容 (用于图片渲染)"""
+    if not _session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} 不存在")
+
+    try:
+        # 使用统一的安全路径解析器
+        target = guard.resolve_workspace_path(
+            session_id,
+            filepath,
+            must_exist=True,
+            must_be_file=True,
+            allow_symlinks=False,
+        )
+    except guard.WorkspacePathError as e:
+        if e.code == "not_found":
+            raise HTTPException(status_code=404, detail=f"文件不存在: {filepath}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"路径解析失败: {e}")
+
+    # 自动推导 MIME 类型
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(
+        path=target,
+        media_type=mime_type or "application/octet-stream",
+        filename=target.name,
+    )
 
 
 # === DELETE /workspace/{filename} ===

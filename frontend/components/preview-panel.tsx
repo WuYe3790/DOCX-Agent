@@ -11,6 +11,7 @@ interface PreviewPanelProps {
   activeFilename: string | null;
   onSelectFile: (name: string) => void;
   onClose: () => void;
+  sessionId?: string | null;
 }
 
 /**
@@ -30,6 +31,7 @@ export default function PreviewPanel({
   activeFilename,
   onSelectFile,
   onClose,
+  sessionId,
 }: PreviewPanelProps) {
   // 防御性: 找不到 activeFilename 对应文件时, 降级到第一个
   // 理论上 fetchDrafts() 已经保证一致, 但保险起见 (例如文件被外部删除)
@@ -95,7 +97,7 @@ export default function PreviewPanel({
             <div className="flex-1 overflow-y-auto p-4 md:p-6">
               {activeFile ? (
                 <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
-                  <MarkdownRenderer content={activeFile.content} />
+                  <MarkdownRenderer content={activeFile.content} sessionId={sessionId} />
                 </div>
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-slate-400 dark:text-zinc-500 px-6">
