@@ -12,3 +12,8 @@ fastapi>=0.100       # 后端 HTTP 框架
 uvicorn>=0.22        # ASGI 服务器
 websockets>=11.0     # WebSocket 协议支持
 pydantic>=2.0        # FastAPI request/response 模型
+
+# === v3 测试 (pytest 在 tests/ 早已用, 之前未声明, 顺手补上) ===
+pytest>=8.0          # tests/ 目录下大量测试已用 pytest, 这次新增的 docx_preview_diff / word_preview 端点测试也用
+httpx>=0.27          # fastapi TestClient 间接依赖, 端点测试需要
+
