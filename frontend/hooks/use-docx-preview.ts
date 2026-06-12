@@ -16,8 +16,9 @@ import type {
   DocxDiagnostic,
 } from "../lib/docx-preview-types";
 
-// docx-preview 是 CommonJS, 需用 default import
-// 类型在 d.ts 里是函数, 我们手动声明最小签名
+// docx-preview 是 ESM, 只导出 named exports (parseAsync / renderAsync / renderDocument / defaultOptions)
+// 关键 bug fix: 之前错误地把 `mod.default` 当作 lib (库无 default export → undefined → "Cannot read 'renderAsync'")
+// 历史: 2026-06-12 session, 修复后保留最小签名 + 防御性检查
 type DocxPreviewLib = {
   renderAsync: (
     data: Blob | ArrayBuffer | Uint8Array,
@@ -30,8 +31,16 @@ type DocxPreviewLib = {
 let docxPreviewModule: DocxPreviewLib | null = null;
 async function loadDocxPreview(): Promise<DocxPreviewLib> {
   if (docxPreviewModule) return docxPreviewModule;
-  const mod = (await import("docx-preview")) as unknown as { default: DocxPreviewLib };
-  docxPreviewModule = mod.default;
+  const mod = (await import("docx-preview")) as { renderAsync?: DocxPreviewLib["renderAsync"] };
+  if (typeof mod.renderAsync !== "function") {
+    // 防御性: 如果未来 docx-preview 改了导出方式, 给清晰的错误
+    const keys = Object.keys(mod).join(", ");
+    throw new Error(
+      `[useDocxPreview] docx-preview 模块结构变了, 找不到 renderAsync. 现有导出: [${keys}]. ` +
+      `请检查 node_modules/docx-preview/dist/ 的 d.ts 文件, 修正 import 方式.`,
+    );
+  }
+  docxPreviewModule = { renderAsync: mod.renderAsync };
   return docxPreviewModule;
 }
 
