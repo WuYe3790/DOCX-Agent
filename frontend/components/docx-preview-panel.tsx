@@ -207,7 +207,8 @@ export default function DocxPreviewPanel({
         </div>
       </div>
 
-      {/* === 状态层: loading / error / fallback === */}
+      {/* === 状态层: idle / loading / error / fallback === */}
+      {status === "idle" && <IdleState />}
       {status === "loading" && <LoadingSkeleton />}
       {status === "error" && <ErrorState onRetry={() => window.location.reload()} />}
       {status === "fallback_text" && textFallback && <FallbackState text={textFallback} />}
@@ -220,25 +221,25 @@ export default function DocxPreviewPanel({
         aria-hidden="true"
       />
 
-      {/* === DOCX 主体容器 (A4 卡片) === */}
-      <div
-        className={`flex-1 overflow-y-auto p-4 md:p-6 ${status === "ready" ? "" : "hidden"}`}
-      >
-        <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
-          <div
-            ref={bodyRef}
-            className="docx docx-preview-body"
-            onClick={(e) => {
-              // 点击段落时, 滚动到下一个 modified 段
-              const target = (e.target as HTMLElement).closest("p[data-preview-state='modified']") as HTMLElement | null;
-              if (target) {
-                const idx = Number(target.getAttribute("data-paragraph-index"));
-                scrollToHighlight(idx);
-              }
-            }}
-          />
+      {/* === DOCX 主体容器 (A4 卡片) — 只在 ready 状态渲染 === */}
+      {status === "ready" && (
+        <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
+            <div
+              ref={bodyRef}
+              className="docx docx-preview-body"
+              onClick={(e) => {
+                // 点击段落时, 滚动到下一个 modified 段
+                const target = (e.target as HTMLElement).closest("p[data-preview-state='modified']") as HTMLElement | null;
+                if (target) {
+                  const idx = Number(target.getAttribute("data-paragraph-index"));
+                  scrollToHighlight(idx);
+                }
+              }}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* === 诊断 drawer (默认折叠, 点 header pill 展开; 5 秒后自动折叠) === */}
       {status === "ready" && diagnostics.length > 0 && showDiagnostics && (
@@ -252,6 +253,24 @@ export default function DocxPreviewPanel({
 }
 
 // === 子组件 ===
+
+function IdleState() {
+  return (
+    <div className="flex-1 overflow-y-auto p-4 md:p-6">
+      <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[400px] border border-slate-200/40 dark:border-zinc-800/40 flex flex-col items-center justify-center text-center">
+        <FileText className="w-12 h-12 mb-3 opacity-30 text-slate-400 dark:text-zinc-500" />
+        <p className="text-sm font-medium text-slate-500 dark:text-zinc-400">
+          暂无 DOCX 预览
+        </p>
+        <p className="text-xs mt-2 text-slate-400 dark:text-zinc-500 max-w-sm leading-relaxed">
+          等待 LLM 完成首次 markdown_to_word 编辑后, 这里会自动出现最近编辑结果.
+          <br />
+          也可以切换到 &quot;草稿 (MD)&quot; tab 查看 markdown 草稿.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function LoadingSkeleton() {
   return (
