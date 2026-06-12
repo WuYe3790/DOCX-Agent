@@ -221,25 +221,30 @@ export default function DocxPreviewPanel({
         aria-hidden="true"
       />
 
-      {/* === DOCX 主体容器 (A4 卡片) — 只在 ready 状态渲染 === */}
-      {status === "ready" && (
-        <div className="flex-1 overflow-y-auto p-4 md:p-6">
-          <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
-            <div
-              ref={bodyRef}
-              className="docx docx-preview-body"
-              onClick={(e) => {
-                // 点击段落时, 滚动到下一个 modified 段
-                const target = (e.target as HTMLElement).closest("p[data-preview-state='modified']") as HTMLElement | null;
-                if (target) {
-                  const idx = Number(target.getAttribute("data-paragraph-index"));
-                  scrollToHighlight(idx);
-                }
-              }}
-            />
-          </div>
+      {/* === DOCX 主体容器 (A4 卡片) ===
+          关键: bodyRef 容器必须 **始终挂载** (用 hidden class 切换可见性),
+          否则 useDocxPreview hook 在 status="loading" 时拿不到 bodyRef.current,
+          waitForRef 超时 → setStatus("error") → 前端报"无法加载预览"
+          (后端 200 OK 但前端失败的死锁; commit 52c3393 改成条件渲染时引入,
+          此处恢复). IdleState/LoadingSkeleton 是覆盖层, 与本容器并存不冲突. */}
+      <div
+        className={`flex-1 overflow-y-auto p-4 md:p-6 ${status === "ready" ? "" : "hidden"}`}
+      >
+        <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
+          <div
+            ref={bodyRef}
+            className="docx docx-preview-body"
+            onClick={(e) => {
+              // 点击段落时, 滚动到下一个 modified 段
+              const target = (e.target as HTMLElement).closest("p[data-preview-state='modified']") as HTMLElement | null;
+              if (target) {
+                const idx = Number(target.getAttribute("data-paragraph-index"));
+                scrollToHighlight(idx);
+              }
+            }}
+          />
         </div>
-      )}
+      </div>
 
       {/* === 诊断 drawer (默认折叠, 点 header pill 展开; 5 秒后自动折叠) === */}
       {status === "ready" && diagnostics.length > 0 && showDiagnostics && (
