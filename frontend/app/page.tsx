@@ -215,6 +215,17 @@ export default function Home() {
     setActiveDocxName(null);
   }, [currentSessionId]);
 
+  // === v3.2: 阶段切换时, 自动设预览模式 ===
+  // word_editing → DOCX tab (默认显示上次编辑结果)
+  // md_draft → MD tab (草稿列表是主要内容)
+  useEffect(() => {
+    if (approvalPhase === "word_editing") {
+      setPreviewMode("docx");
+    } else if (approvalPhase === "md_draft") {
+      setPreviewMode("md");
+    }
+  }, [approvalPhase]);
+
   // === v2: 切会话 = 关闭旧 WS + 通过 resume 拉新 (Bug B 完整修复) ===
   const handleSelectSession = (id: string) => {
     if (id === currentSessionId) {
