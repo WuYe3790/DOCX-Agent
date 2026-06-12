@@ -11,8 +11,8 @@
 //   - hook 返回 bodyRef / styleRef / status / paragraphChanges / diagnostics
 //   - 本组件负责把这些渲染成 A4 卡片 + 顶部 diff 计数 + 右侧 diagnostics 浮层
 
-import { useEffect, useMemo } from "react";
-import { FileText, X, AlertCircle, AlertTriangle, Info, Download } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { FileText, X, AlertCircle, AlertTriangle, Info, Download, ChevronRight } from "lucide-react";
 import { useDocxPreview } from "../hooks/use-docx-preview";
 import type {
   DocxDiagnostic,
@@ -60,14 +60,19 @@ export default function DocxPreviewPanel({
       const n = idx + 1;  // 1-based
       const change = changesByIndex.get(n);
       el.setAttribute("data-paragraph-index", String(n));
-      if (change) {
-        // 简单的"修改"判定: 文本变了
-        if (change.before !== change.after) {
+      if (change && change.before !== change.after) {
+        // 区分"新增"(绿色) vs "修改"(蓝色)
+        // 判定: before 为空 → 是新增段; 否则是修改
+        if (change.before === "") {
+          el.setAttribute("data-preview-state", "added");
+          el.setAttribute("title", `新增内容: ${change.after.slice(0, 80)}...`);
+        } else {
           el.setAttribute("data-preview-state", "modified");
           el.setAttribute("title", `修改前: ${change.before.slice(0, 80)}...`);
         }
       } else {
         el.setAttribute("data-preview-state", "unchanged");
+        el.removeAttribute("title");
       }
     });
   }, [status, paragraphChanges, bodyRef]);
@@ -77,6 +82,19 @@ export default function DocxPreviewPanel({
     [paragraphChanges],
   );
 
+  // v3.1: 诊断面板默认折叠, 避免挡视野
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  // 新一次 preview 进来时自动重新展开 (用户想看), 5 秒后自动折叠
+  useEffect(() => {
+    if (status === "ready" && diagnostics.length > 0) {
+      // 合法模式: 状态机由 input 驱动 (status/diagnostics 变化时重置 + 5s timeout)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShowDiagnostics(true);
+      const t = setTimeout(() => setShowDiagnostics(false), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [status, diagnostics.length]);
+
   if (!show) return null;
 
   return (
@@ -84,9 +102,12 @@ export default function DocxPreviewPanel({
       className="h-full flex flex-col isolate"
       data-testid="docx-preview-panel"
     >
-      {/* === 局部样式: 玻璃拟态 + 闪烁高亮 === */}
+      {/* === 局部样式: 玻璃拟态 + 闪烁高亮 ===
+          注意: 段落是 docx-preview 在 bodyEl 里动态创建的 <p data-preview-state="modified">,
+          CSS 选择器必须用 [data-preview-state="modified"] (之前用 .docx-preview-modified 类,
+          永远不匹配, 玻璃拟态效果完全不显示) */}
       <style>{`
-        .docx-preview-modified {
+        [data-preview-state="modified"] {
           position: relative;
           background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(99, 102, 241, 0.04)) !important;
           backdrop-filter: blur(4px);
@@ -97,7 +118,10 @@ export default function DocxPreviewPanel({
           border-radius: 0 6px 6px 0;
           transition: background 0.3s ease;
         }
-        .docx-preview-modified::before {
+        [data-preview-state="modified"]:hover {
+          background: linear-gradient(135deg, rgba(59, 130, 246, 0.14), rgba(99, 102, 241, 0.08)) !important;
+        }
+        [data-preview-state="modified"]::before {
           content: "✎";
           position: absolute;
           right: 4px;
@@ -105,6 +129,19 @@ export default function DocxPreviewPanel({
           color: rgb(99, 102, 241);
           font-size: 10px;
           opacity: 0.6;
+          pointer-events: none;
+        }
+        /* 区分"新增"和"修改" (绿色 vs 蓝色) */
+        [data-preview-state="added"] {
+          background: linear-gradient(135deg, rgba(16, 185, 129, 0.10), rgba(34, 197, 94, 0.04)) !important;
+          border-left-color: rgb(16, 185, 129) !important;
+        }
+        [data-preview-state="added"]::before {
+          content: "+";
+          color: rgb(16, 185, 129);
+        }
+        [data-preview-state="added"]:hover {
+          background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(34, 197, 94, 0.08)) !important;
         }
         .docx-preview-highlight-flash {
           animation: docx-flash 3s ease-out;
@@ -131,6 +168,22 @@ export default function DocxPreviewPanel({
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 shrink-0">
               ✎ {modifiedCount} 处修改
             </span>
+          )}
+          {diagnostics.length > 0 && status === "ready" && (
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics((v) => !v)}
+              className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 transition-colors ${
+                showDiagnostics
+                  ? "bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200"
+                  : "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200/70"
+              }`}
+              title={showDiagnostics ? "折叠诊断" : "展开诊断"}
+              data-testid="diagnostics-toggle"
+            >
+              ⚠ {diagnostics.length} 诊断
+              <ChevronRight className={`inline w-3 h-3 ml-0.5 transition-transform ${showDiagnostics ? "rotate-90" : ""}`} />
+            </button>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -187,9 +240,12 @@ export default function DocxPreviewPanel({
         </div>
       </div>
 
-      {/* === 诊断徽章层 (悬浮在主体右侧, 仅当有 diagnostics) === */}
-      {status === "ready" && diagnostics.length > 0 && (
-        <DiagnosticBadges diagnostics={diagnostics} />
+      {/* === 诊断 drawer (默认折叠, 点 header pill 展开; 5 秒后自动折叠) === */}
+      {status === "ready" && diagnostics.length > 0 && showDiagnostics && (
+        <DiagnosticDrawer
+          diagnostics={diagnostics}
+          onClose={() => setShowDiagnostics(false)}
+        />
       )}
     </div>
   );
@@ -256,23 +312,39 @@ function FallbackState({ text }: { text: string }) {
   );
 }
 
-function DiagnosticBadges({ diagnostics }: { diagnostics: DocxDiagnostic[] }) {
+function DiagnosticDrawer({
+  diagnostics,
+  onClose,
+}: {
+  diagnostics: DocxDiagnostic[];
+  onClose: () => void;
+}) {
   return (
     <div
-      className="absolute top-20 right-6 w-72 max-h-[60vh] overflow-y-auto space-y-2 z-10"
+      // 关键 UX: 用 transform 滑入, 不阻塞主区; 顶栏 sticky 始终可点 X 关闭
+      className="absolute inset-y-0 right-0 w-80 max-w-[90%] bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-l border-slate-200/60 dark:border-zinc-800/60 shadow-2xl z-20 flex flex-col"
       data-testid="diagnostic-badges"
     >
-      <div className="text-[10px] font-mono text-slate-500 dark:text-zinc-400 uppercase tracking-wider px-1">
-        诊断 ({diagnostics.length})
-      </div>
-      {diagnostics.slice(0, 8).map((d, idx) => (
-        <DiagnosticBadge key={`${d.code}-${idx}`} diagnostic={d} />
-      ))}
-      {diagnostics.length > 8 && (
-        <div className="text-[10px] text-slate-400 text-center">
-          还有 {diagnostics.length - 8} 条...
+      {/* sticky 顶部, 始终可见 (含 X 关闭按钮) */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200/60 dark:border-zinc-800/60 shrink-0">
+        <div className="text-[10px] font-mono text-slate-600 dark:text-zinc-300 uppercase tracking-wider">
+          诊断 ({diagnostics.length})
         </div>
-      )}
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400"
+          aria-label="关闭诊断"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {/* 滚动列表, 显示全部 (不再限制 8 条) */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+        {diagnostics.map((d, idx) => (
+          <DiagnosticBadge key={`${d.code}-${idx}`} diagnostic={d} />
+        ))}
+      </div>
     </div>
   );
 }
