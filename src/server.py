@@ -22,6 +22,7 @@ from md_tools.markdown_to_word import markdown_to_word
 from docx_tools.diff_docx import diff_docx
 from agent import Agent, SYSTEM_PROMPT, create_log_file, append_log
 from workspace.api import router as workspace_router  # v2: 上传 / 列表 / 删除 endpoints
+from workspace.guard import WorkspacePathError, resolve_workspace_path  # v3: /api/word/preview 沙箱校验
 
 app = FastAPI(title="DOCX-Agent Backend API", version="1.0.0")
 
@@ -218,15 +219,45 @@ async def word_diff(req: DiffRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/download")
-async def download_file(path: str):
-    file_path = Path(path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="文件不存在")
+# v3: 实时 DOCX 预览端点 — 走 workspace 沙箱, 强制带 session_id
+# 设计:
+#   - 替换原 /api/download (死代码, grep 确认无前端调用)
+#   - 必须 session_id + path, 走 resolve_workspace_path 防 LLM 幻觉路径
+#   - Cache-Control: no-store, 前端用 ?v=<mtime> 自己控缓存
+@app.get("/api/word/preview")
+async def word_preview(session_id: str, path: str):
+    """实时预览 docx 文件 (供 docx-preview 浏览器端渲染).
+
+    路径: /api/word/preview?session_id=<id>&path=<workspace_rel>
+    沙箱: resolve_workspace_path(session_id, path, must_exist=True, must_be_file=True)
+    响应: 200 application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    错误:
+      - 400 (session_id 非法 / 路径越界)
+      - 404 (文件不存在)
+      - 500 (其他异常)
+    """
+    try:
+        resolved = resolve_workspace_path(
+            session_id, path, must_exist=True, must_be_file=True
+        )
+    except WorkspacePathError as e:
+        # 区分错误码: 非法 session_id / 越界 / 不存在
+        status_map = {
+            "name_invalid": 400,
+            "absolute": 400,
+            "traversal": 400,
+            "out_of_root": 400,
+            "not_found": 404,
+            "not_file": 400,
+            "symlink": 400,
+        }
+        status_code = status_map.get(e.code, 400)
+        raise HTTPException(status_code=status_code, detail=e.user_message)
     return FileResponse(
-        path=file_path,
-        filename=file_path.name,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        path=resolved,
+        filename=resolved.name,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Cache-Control": "no-store"},
     )
 
 
