@@ -41,8 +41,9 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_ORIGIN}/api/word/diff`,
       },
       {
-        source: "/api/download",
-        destination: `${BACKEND_ORIGIN}/api/download`,
+        // v3: 实时 DOCX 预览 — 替换原 /api/download 死端点
+        source: "/api/word/preview",
+        destination: `${BACKEND_ORIGIN}/api/word/preview`,
       },
     ];
   },
