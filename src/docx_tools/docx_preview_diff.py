@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import json
 import sys
 import tempfile
@@ -92,15 +93,79 @@ def build_paragraph_diff(before_path: Path, after_path: Path) -> dict:
         before_texts = _paragraph_texts(str(before_path))
         after_texts = _paragraph_texts(str(after_path))
         paragraph_changes: list[dict] = []
-        for i in range(max(len(before_texts), len(after_texts))):
-            before = before_texts[i] if i < len(before_texts) else ""
-            after = after_texts[i] if i < len(after_texts) else ""
-            if before != after:
-                paragraph_changes.append({
-                    "paragraph_index": i + 1,
-                    "before": before,
-                    "after": after,
-                })
+
+        # v3.3: 改用 LCS-based diff (difflib.SequenceMatcher), 替代原 position-based 配对
+        # 原算法 (按 i 1:1 配 before_texts[i] vs after_texts[i]) 在中间插入/删除段时,
+        # 后续所有段都会"对齐错位": 新增段被标 modified, 未变段被标 added/modified.
+        # 前端表现 = 绿框/蓝框落在邻段甚至空行上. 用 SequenceMatcher 后:
+        #   - paragraph_index 始终是 after (新版 docx) 中的真实位置, 与 docx-preview 渲染顺序对齐
+        #   - 真新增 → before="", added 绿色精准命中
+        #   - 真删除 → after="", 锚到 after 中"它原本所在的位置后一段", 不再连累后段
+        #   - 真修改 → before/after 非空, modified 蓝色精准命中
+        #
+        # v3.4: 加 anchor_text 字段 (取 after 优先, 空则 before).
+        # 原因: 后端 paragraph_index 只数 <w:body>/<w:p> 直接子段, 而前端 docx-preview
+        # 渲染时的 <p> 流包含表格 cell 内段 / 页眉页脚段 (renderHeaders/Footers 默认开启),
+        # 两边段落定义不一致 → 前端按 idx 取 <p> 必然偏移. anchor_text 让前端按"内容匹配"
+        # 而非"位置匹配", 与 CLAUDE.md 中 "paragraph_index + anchor_text 防误对齐" 契约统一.
+        # 用 .strip() 让前后端比较都用 trim 后的文本, 容忍空格/换行差异.
+        def _anchor(before: str, after: str) -> str:
+            return (after or before).strip()
+
+        matcher = difflib.SequenceMatcher(a=before_texts, b=after_texts, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag == "replace":
+                # before[i1:i2] 替换成 after[j1:j2]: 1:1 配对的部分标 modified,
+                # 多出的 before 段标 deleted, 多出的 after 段标 added
+                n_min = min(i2 - i1, j2 - j1)
+                for k in range(n_min):
+                    before, after = before_texts[i1 + k], after_texts[j1 + k]
+                    paragraph_changes.append({
+                        "paragraph_index": j1 + k + 1,
+                        "before": before,
+                        "after": after,
+                        "anchor_text": _anchor(before, after),
+                    })
+                # 多出的 before (i 多于 j) → 锚到 after 里 1:1 部分之后的位置
+                for k in range(n_min, i2 - i1):
+                    before = before_texts[i1 + k]
+                    paragraph_changes.append({
+                        "paragraph_index": j1 + n_min + 1,
+                        "before": before,
+                        "after": "",
+                        "anchor_text": _anchor(before, ""),
+                    })
+                # 多出的 after (j 多于 i) → after 中的真实位置
+                for k in range(n_min, j2 - j1):
+                    after = after_texts[j1 + k]
+                    paragraph_changes.append({
+                        "paragraph_index": j1 + k + 1,
+                        "before": "",
+                        "after": after,
+                        "anchor_text": _anchor("", after),
+                    })
+            elif tag == "delete":
+                # before[i1:i2] 在 after 中不存在: 锚到 j1+1 (after 里"它本该所在位置的下一段")
+                for k in range(i1, i2):
+                    before = before_texts[k]
+                    paragraph_changes.append({
+                        "paragraph_index": j1 + 1,
+                        "before": before,
+                        "after": "",
+                        "anchor_text": _anchor(before, ""),
+                    })
+            elif tag == "insert":
+                # after[j1:j2] 是新增的 → paragraph_index 就是 after 中的实际 1-based 位置
+                for k in range(j1, j2):
+                    after = after_texts[k]
+                    paragraph_changes.append({
+                        "paragraph_index": k + 1,
+                        "before": "",
+                        "after": after,
+                        "anchor_text": _anchor("", after),
+                    })
 
         return {
             "changed_files": changed_files,
