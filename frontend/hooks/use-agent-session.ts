@@ -15,6 +15,58 @@ export interface CurrentSessionInfo {
 
 const CURRENT_SESSION_KEY = "docx-agent:currentSessionId";
 
+// === v3.2 helper: 从 messages[] 找最近成功的 markdown_to_word 结果 ===
+// 用途: 切到 word_editing 阶段时, 后端没推 docx_preview_ready (那是事件级),
+//       但 history 里的 messages[] 含有最近一次 markdown_to_word 的成功 result.
+//       我们合成一个 DocxPreviewReady 喂给 panel, 立刻显示上次编辑结果 (而不是空).
+function findLastMarkdownToWordResult(messages: Message[]): DocxPreviewReady | null {
+  // 从末尾向前找, 第一个 status="success" 的 markdown_to_word
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (
+      msg.role === "tool" &&
+      msg.toolName === "markdown_to_word" &&
+      msg.toolStatus === "success" &&
+      msg.toolResult
+    ) {
+      try {
+        const result = JSON.parse(msg.toolResult) as {
+          status?: string;
+          docx_path?: string;
+          output_path?: string;
+          action_count?: number;
+          diagnostics?: DocxPreviewReady["diagnostics"];
+          support_summary?: DocxPreviewReady["support_summary"];
+        };
+        if (
+          result.status === "ok" &&
+          result.docx_path &&
+          result.output_path
+        ) {
+          return {
+            type: "docx_preview_ready",
+            preview_path: result.output_path,
+            input_path: result.docx_path,
+            // PoC 简化: 不查真实 mtime, 用 Date.now() 保证首次渲染触发.
+            // 后续新 markdown_to_word 事件会用真实 mtime 覆盖, 自然 bust 缓存.
+            // 服务端 endpoint 也设了 Cache-Control: no-store, HTTP 层不缓存.
+            docx_mtime_ms: Date.now(),
+            // 没有 diff 数据 (历史快照), 等下次 markdown_to_word 才有真实 diff
+            paragraph_changes: [],
+            changed_files: [],
+            diagnostics: result.diagnostics ?? [],
+            action_count: result.action_count ?? 0,
+            support_summary: result.support_summary ?? { native: 0, degraded: 0, rejected: 0 },
+          };
+        }
+      } catch {
+        // 解析失败, 继续往前找
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * useAgentSession — 封装 WebSocket 生命周期 + onmessage 状态机 + 实时流 refs
  *
@@ -288,8 +340,20 @@ export function useAgentSession(opts: {
           onRefreshSessions();
           // 切到 md_draft 阶段的 session: 自动拉取其草稿文件列表
           // (切会话时不会触发 wait_approval, 所以必须在 resume 阶段补一刀)
-          if (data.approvalPhase === "md_draft") {
+          // v3: 切到 word_editing 阶段也展开预览面板 + 拉草稿
+          // (word_editing 阶段没有 wait_approval, 唯一机会就是 history 帧)
+          if (data.approvalPhase === "md_draft" || data.approvalPhase === "word_editing") {
+            onShowPreview(true);
             onFetchDrafts(data.session_id);
+          }
+          // v3.2: word_editing resume 时, 从 messages[] 里找最近成功的 markdown_to_word
+          //        合成一个 DocxPreviewReady, 让 panel 立刻显示上次编辑结果
+          //        (而不是等下次 markdown_to_word 才有内容)
+          if (data.approvalPhase === "word_editing") {
+            const syntheticPreview = findLastMarkdownToWordResult(data.messages || []);
+            if (syntheticPreview) {
+              setDocxPreviewInfo(syntheticPreview);
+            }
           }
           break;
         }
