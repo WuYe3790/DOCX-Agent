@@ -16,9 +16,14 @@ export interface DocxDiagnostic {
 }
 
 export interface ParagraphChange {
-  paragraph_index: number;      // 1-based
+  paragraph_index: number;      // 1-based, 后端 <w:body>/<w:p> 直接子段序号 (不含表格/页眉内段)
   before: string;
   after: string;
+  // v3.4: 锚文本 (= after || before, .strip()).
+  // 前端按内容匹配 docx-preview 渲染的 <p>, 而不是按 idx — 因为 docx-preview
+  // 的 <p> 流含表格 cell / 页眉页脚段, 与后端 paragraph_index 段落定义不一致.
+  // optional: 向后兼容 history 里旧 payload (未带此字段时 fallback 到 index 匹配).
+  anchor_text?: string;
   contains_marker?: boolean;
 }
 

@@ -43,33 +43,86 @@ export default function DocxPreviewPanel({
   } = useDocxPreview({ sessionId, info });
 
   // === 把 paragraphChanges 注入到 docx-preview 渲染出的 DOM ===
-  // docx-preview 用 className="docx_p" 标段落, 我们按出现顺序设 data-paragraph-index + data-preview-state
-  // CSS 在 <style> 标签里靠 [data-preview-state="modified"] 选
+  // v3.4: 改用 anchor_text 内容匹配, 不再按 idx 取 <p>.
+  //
+  // 为什么不能用 idx:
+  //   - 后端 paragraph_index 只数 <w:body>/<w:p> 直接子段 (不含表格 cell / 页眉 / 页脚)
+  //   - docx-preview 渲染的 <p class="docx_p"> 流包含表格 cell 内段 + 页眉/页脚段
+  //     (renderHeaders/Footers 默认开, 见 use-docx-preview.ts:162-165)
+  //   - 实验报告这种"封面是表格"的文档, 表格内段几十个, idx 偏移巨大,
+  //     绿/蓝高亮落到无关段 — 用户实际看到的现象 (v3.3 LCS 修复后仍有此问题)
+  //
+  // 新算法:
+  //   1. 把每条 change 按 anchor_text (= after || before, 已 strip) 入桶 queueByAnchor
+  //   2. 遍历所有 <p.docx_p>, 取 textContent.trim() 作为 key 查桶
+  //   3. 桶里有待消费 change → 取队首 (FIFO, 容忍同文本多次出现, 按 DOM 顺序配对)
+  //   4. 没命中 → 标 unchanged
+  //
+  // Fallback: 旧 payload (history 里) 可能没 anchor_text → 退回 idx 匹配 (维持原行为)
+  // 跳过: deleted 段 (after=""), 因 docx 里这段不存在, 没有 DOM 节点可标
   useEffect(() => {
     if (status !== "ready") return;
     const bodyEl = bodyRef.current;
     if (!bodyEl) return;
 
-    const paragraphs = bodyEl.querySelectorAll("p.docx_p, p");
-    const changesByIndex = new Map<number, { before: string; after: string }>();
+    // v3.4.1: selector 必须用 "p" 选所有段, 不能用 "p.docx_p"
+    // 原因: 实测 docx-preview 源码 renderClass (docx-preview.mjs:3830) 只在段引用
+    //       Word 样式名时才加 class (格式 "docx_标题1"); 纯段不加任何 class.
+    //       之前注释说"docx-preview 用 className=docx_p 标段落"是错的, .docx_p
+    //       从未匹配任何元素 — 老 selector "p.docx_p, p" 实际靠 `, p` 兜底.
+    //
+    // 错标隔离:
+    //   - 页眉/页脚在 docx-preview 单独的 header/footer 容器, 在 bodyEl 外, 不会被选到
+    //   - 表格 cell 内段虽在 bodyEl 内, 但靠 anchor_text 内容过滤天然不命中
+    //     (后端 paragraph_changes 只覆盖 body 顶层段)
+    const paragraphs = Array.from(bodyEl.querySelectorAll<HTMLElement>("p"));
+
+    // === 分两套路径: anchor_text 优先, 缺失时 fallback 到 idx ===
+    const hasAnchor = paragraphChanges.some((c) => typeof c.anchor_text === "string");
+
+    type Bucket = { before: string; after: string; state: "added" | "modified" };
+    const queueByAnchor = new Map<string, Bucket[]>();
+    const changesByIndex = new Map<number, Bucket>();
+
     for (const c of paragraphChanges) {
-      changesByIndex.set(c.paragraph_index, { before: c.before, after: c.after });
+      if (c.before === c.after) continue;          // no-op
+      if (c.after === "") continue;                // deleted 段无 DOM 节点, 跳过
+      const state: Bucket["state"] = c.before === "" ? "added" : "modified";
+      const bucket: Bucket = { before: c.before, after: c.after, state };
+
+      if (hasAnchor) {
+        const anchor = (c.anchor_text ?? c.after).trim();
+        if (!anchor) continue;
+        const q = queueByAnchor.get(anchor) ?? [];
+        q.push(bucket);
+        queueByAnchor.set(anchor, q);
+      } else {
+        // fallback: 老 payload 用 idx
+        changesByIndex.set(c.paragraph_index, bucket);
+      }
     }
 
     paragraphs.forEach((el, idx) => {
-      const n = idx + 1;  // 1-based
-      const change = changesByIndex.get(n);
+      const n = idx + 1;
       el.setAttribute("data-paragraph-index", String(n));
-      if (change && change.before !== change.after) {
-        // 区分"新增"(绿色) vs "修改"(蓝色)
-        // 判定: before 为空 → 是新增段; 否则是修改
-        if (change.before === "") {
-          el.setAttribute("data-preview-state", "added");
-          el.setAttribute("title", `新增内容: ${change.after.slice(0, 80)}...`);
-        } else {
-          el.setAttribute("data-preview-state", "modified");
-          el.setAttribute("title", `修改前: ${change.before.slice(0, 80)}...`);
-        }
+
+      let hit: Bucket | undefined;
+      if (hasAnchor) {
+        const text = (el.textContent ?? "").trim();
+        const q = text ? queueByAnchor.get(text) : undefined;
+        if (q && q.length > 0) hit = q.shift();
+      } else {
+        hit = changesByIndex.get(n);
+      }
+
+      if (hit) {
+        el.setAttribute("data-preview-state", hit.state);
+        el.setAttribute(
+          "title",
+          hit.state === "added"
+            ? `新增内容: ${hit.after.slice(0, 80)}...`
+            : `修改前: ${hit.before.slice(0, 80)}...`,
+        );
       } else {
         el.setAttribute("data-preview-state", "unchanged");
         el.removeAttribute("title");
