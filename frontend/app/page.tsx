@@ -29,6 +29,10 @@ export default function Home() {
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
 
+  // === v3: 预览面板的 tab 模式 (MD 草稿 vs DOCX 实时) ===
+  //   默认 "md"; word_editing 阶段收到 docx_preview_ready 时 auto-switch 到 "docx"
+  const [previewMode, setPreviewMode] = useState<"md" | "docx">("md");
+
   // === v2 (Phase 4): 文件工作区 (上传 / 选 active docx / 删除) ===
   const [showWorkspace, setShowWorkspace] = useState<boolean>(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
@@ -56,6 +60,11 @@ export default function Home() {
     onFetchDrafts: (sessionId) => { void fetchDrafts(sessionId); },
     onResetDrafts: () => resetDrafts(),
     onShowPreview: (show) => setShowPreview(show),
+    onDocxPreviewReady: (info) => {
+      // v3: 收到 markdown_to_word 完成事件 → auto-switch 到 DOCX tab + 展开预览
+      setPreviewMode("docx");
+      setShowPreview(true);
+    },
   });
   const {
     messages,
@@ -71,6 +80,7 @@ export default function Home() {
     currentSessionId,
     setCurrentSessionId,
     streamMode,
+    docxPreviewInfo,  // v3: 实时 DOCX 预览事件
     start: startAgentSession,
     stop: stopAgentSession,
     sendContinue,
@@ -474,6 +484,9 @@ export default function Home() {
           onSelectFile={setActiveFilename}
           onClose={() => setShowPreview(false)}
           sessionId={currentSessionId}
+          previewMode={previewMode}
+          onPreviewModeChange={setPreviewMode}
+          docxPreviewInfo={docxPreviewInfo}
         />
         {/* v2 (Phase 4): Workspace 文件工作区面板 (与 PreviewPanel 同 slot, 互斥) */}
         <WorkspacePanel

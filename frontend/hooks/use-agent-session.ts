@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { Message } from "../lib/message-types";
+import type { DocxPreviewReady } from "../lib/docx-preview-types";
 
 export type ApprovalPhase = "style_review" | "md_draft" | "word_editing" | null;
 
@@ -26,8 +27,9 @@ export function useAgentSession(opts: {
   onFetchDrafts: (sessionId: string) => void;
   onResetDrafts: () => void;
   onShowPreview: (show: boolean) => void;
+  onDocxPreviewReady?: (info: DocxPreviewReady) => void;  // v3: 实时 DOCX 预览事件回调
 }) {
-  const { onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview } = opts;
+  const { onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview, onDocxPreviewReady } = opts;
 
   // === Agent state (从 page.tsx 1:1 搬入) ===
   const [messages, setMessages] = useState<Message[]>([]);
@@ -84,6 +86,9 @@ export function useAgentSession(opts: {
     currentSessionIdRef.current = id;
   }, []);
 
+  // === v3: 实时 DOCX 预览状态 (markdown_to_word 完成后由后端推 docx_preview_ready) ===
+  const [docxPreviewInfo, setDocxPreviewInfo] = useState<DocxPreviewReady | null>(null);
+
   // === 实时流清理 ===
   const clearLiveStream = useCallback(() => {
     liveReasoningRef.current = "";
@@ -114,6 +119,7 @@ export function useAgentSession(opts: {
     setTokenCount(0);
     setCurrentSessionId(null);
     setCurrentSessionInfo(null);
+    setDocxPreviewInfo(null);  // v3: 切会话时清空预览
     pendingPromptRef.current = "";
     if (wsRef.current) {
       wsRef.current.close();
@@ -132,6 +138,7 @@ export function useAgentSession(opts: {
     setIsWaitingApproval(false);
     setApprovalPhase(null);
     setIsGenerating(false);
+    setDocxPreviewInfo(null);  // v3: 切会话时清空预览
     pendingPromptRef.current = "";
     if (wsRef.current) {
       wsRef.current.close();
@@ -419,6 +426,14 @@ export function useAgentSession(opts: {
           break;
         }
 
+        // v3: 实时 DOCX 预览事件 (markdown_to_word 完成后由后端推)
+        case "docx_preview_ready": {
+          const info = data as DocxPreviewReady;
+          setDocxPreviewInfo(info);
+          onDocxPreviewReady?.(info);  // page.tsx 用这个切到 docx tab
+          break;
+        }
+
         case "paused": {
           // v3: 切历史后后端 yield 的首个事件, 表示"已恢复状态, 等用户消息"
           // 作用:
@@ -549,7 +564,7 @@ export function useAgentSession(opts: {
       setApprovalPhase(null);
       setIsGenerating(false);
     };
-  }, [onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview, setCurrentSessionId, clearLiveStream, streamMode]);
+  }, [onRefreshSessions, onFetchDrafts, onResetDrafts, onShowPreview, setCurrentSessionId, clearLiveStream, streamMode, onDocxPreviewReady]);
 
   // === unmount 时关 WS (原 page.tsx 没有 cleanup, 但我们补上避免泄漏) ===
   useEffect(() => {
@@ -576,6 +591,7 @@ export function useAgentSession(opts: {
     currentSessionId,
     currentSessionInfo,
     streamMode,
+    docxPreviewInfo,  // v3: 实时 DOCX 预览 (markdown_to_word 完成后由后端推)
     // setters (供 page handlers 调用)
     setCurrentSessionId,
     // actions
