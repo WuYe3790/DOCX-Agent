@@ -67,9 +67,11 @@ from llm_adapter import LLMClientAdapter
 from llm_adapter.response_parser import extract_reasoning
 from llm_adapter.quirks import apply_quirk, QuirkAction
 from docx_tools import call_tool
+from docx_tools.docx_preview_diff import build_paragraph_diff, extract_preview_event
 from context_manager import MessageManager
 from state_machine import WorkflowTransitions, TransitionDirective
 from session_persistence import SessionPersistence
+from workspace.guard import WorkspacePathError, resolve_workspace_path
 
 
 # 流式调用可重试的异常（pre-stream 阶段）
@@ -270,6 +272,80 @@ class Agent:
         """
         self._stream_mode = bool(stream_mode)
         self._append_log("stream_mode_changed", {"stream_mode": self._stream_mode})
+
+    # ─── v3: DOCX 实时预览钩子 (markdown_to_word 完成 → 推 docx_preview_ready) ───
+
+    async def _maybe_emit_docx_preview(self, tool_name: str, tool_result_str: str) -> dict | None:
+        """[v3] markdown_to_word 完成后, 算 diff 并组装 docx_preview_ready 事件.
+
+        触发条件:
+          - tool_name == "markdown_to_word" (其他工具直接返回 None)
+
+        失败场景 (全部静默返回 None, caller 不 yield, 主流程不感知):
+          - JSON 解析失败 / status != "ok" / 缺关键字段
+          - 路径越界 / 文件不存在 (resolve_workspace_path 失败)
+          - zip 损坏 / 解析异常 (build_paragraph_diff 静默吞)
+        """
+        if tool_name != "markdown_to_word":
+            return None
+
+        # 1. 解析 markdown_to_word 的 result JSON
+        preview_data = extract_preview_event(tool_result_str)
+        if not preview_data:
+            return None
+
+        # 2. 沙箱校验两个路径 (LLM 可能幻觉路径, 必须 resolve_workspace_path)
+        try:
+            input_path = resolve_workspace_path(
+                self.session_id, preview_data["docx_path"],
+                must_exist=True, must_be_file=True,
+            )
+            output_path = resolve_workspace_path(
+                self.session_id, preview_data["output_path"],
+                must_exist=True, must_be_file=True,
+            )
+        except WorkspacePathError as exc:
+            self._append_log("docx_preview_skip", {
+                "reason": "resolve_workspace_path failed",
+                "error": str(exc),
+            })
+            return None
+        except Exception as exc:
+            self._append_log("docx_preview_skip", {
+                "reason": "unexpected resolve error",
+                "error": repr(exc),
+            })
+            return None
+
+        # 3. 算 diff — 走线程池避免阻塞事件循环 (读两个 docx + 算 hash)
+        try:
+            diff = await asyncio.to_thread(build_paragraph_diff, input_path, output_path)
+        except Exception as exc:
+            self._append_log("docx_preview_skip", {
+                "reason": "build_paragraph_diff failed",
+                "error": repr(exc),
+            })
+            return None
+
+        # 4. 组装事件 payload
+        try:
+            docx_mtime_ms = int(output_path.stat().st_mtime * 1000)
+        except Exception:
+            docx_mtime_ms = 0
+
+        return {
+            "type": "docx_preview_ready",
+            "preview_path": preview_data["output_path"],
+            "input_path": preview_data["docx_path"],
+            "docx_mtime_ms": docx_mtime_ms,
+            "paragraph_changes": diff.get("paragraph_changes", []),
+            "changed_files": diff.get("changed_files", []),
+            "diagnostics": preview_data.get("diagnostics", []),
+            "action_count": preview_data.get("action_count", 0),
+            "support_summary": preview_data.get(
+                "support_summary", {"native": 0, "degraded": 0, "rejected": 0}
+            ),
+        }
 
     async def step(self):
         """
@@ -622,6 +698,11 @@ class Agent:
                     yield {"type": "tool_end", "name": name, "result": result}
                     self._checkpoint()  # Checkpoint 3: tool "success/error" 状态入库
                     self.msg_mgr.append_tool_result(tc["id"], result)
+
+                    # v3: DOCX 实时预览 — 只对 markdown_to_word 触发, 失败静默
+                    preview_event = await self._maybe_emit_docx_preview(name, result)
+                    if preview_event:
+                        yield preview_event
 
                     # 追踪 write_markdown_draft 写入的文件路径, 供 wait_approval 读取
                     if name == "write_markdown_draft":
