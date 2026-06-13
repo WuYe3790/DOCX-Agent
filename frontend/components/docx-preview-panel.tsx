@@ -158,7 +158,7 @@ export default function DocxPreviewPanel({
 
   return (
     <div
-      className="h-full flex flex-col isolate"
+      className="flex-1 flex flex-col isolate relative"
       data-testid="docx-preview-panel"
     >
       {/* === 局部样式: 玻璃拟态 + 闪烁高亮 ===
