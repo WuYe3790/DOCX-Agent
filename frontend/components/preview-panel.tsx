@@ -211,10 +211,13 @@ export default function PreviewPanel({
               ) : null}
             </div>
 
-            {/* 主体: 根据 previewMode 切换 MD / DOCX */}
-            {previewMode === "md" ? (
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
-                {activeFile ? (
+            {/* v3.6: 主体 wrapper 提升为 MD/DOCX 共用, 消除 DOM 嵌套深度差
+                (subpixel 偏移 1-2px). 历史注释 (commit 52c3393 等) 仍适用:
+                此 wrapper 是父级 h-full flex flex-col 的最后一个 flex-1 子元素,
+                MD/DOCX 共用此层后, 卡片位置算法路径完全一致. */}
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
+              {previewMode === "md" ? (
+                activeFile ? (
                   <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
                     <MarkdownRenderer content={activeFile.content} sessionId={sessionId} />
                   </div>
@@ -226,18 +229,18 @@ export default function PreviewPanel({
                       请在左侧对话中让 LLM 写入 Markdown 草稿
                     </p>
                   </div>
-                )}
-              </div>
-            ) : (
-              <DocxPreviewPanel
-                show={show}
-                sessionId={sessionId ?? null}
-                info={docxPreviewInfo}
-                onClose={onClose}
-                showDiagnostics={showDocxDiagnostics}
-                onShowDiagnosticsChange={setShowDocxDiagnostics}
-              />
-            )}
+                )
+              ) : (
+                <DocxPreviewPanel
+                  show={show}
+                  sessionId={sessionId ?? null}
+                  info={docxPreviewInfo}
+                  onClose={onClose}
+                  showDiagnostics={showDocxDiagnostics}
+                  onShowDiagnosticsChange={setShowDocxDiagnostics}
+                />
+              )}
+            </div>
           </div>
         </motion.div>
       )}
