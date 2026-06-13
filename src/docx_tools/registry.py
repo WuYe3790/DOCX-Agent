@@ -45,6 +45,7 @@ from .set_text_format import set_text_format, tools_schema as set_text_format_sc
 from .unzip_docx import unzip_docx, tools_schema as unzip_docx_schema
 
 from basic_tools.analyze_image_content import analyze_image_content, tools_schema as analyze_image_content_schema
+from basic_tools.generate_image import generate_image, tools_schema as generate_image_schema
 from basic_tools.ls import ls, tools_schema as ls_schema
 from basic_tools.read import read, tools_schema as read_schema
 
@@ -83,6 +84,7 @@ TOOLS = {
     "ls": ls,
     "read": read,
     "analyze_image_content": analyze_image_content,
+    "generate_image": generate_image,
 }
 
 TOOLS_SCHEMA = [
@@ -119,6 +121,7 @@ TOOLS_SCHEMA = [
     ls_schema,
     read_schema,
     analyze_image_content_schema,
+    generate_image_schema,
 ]
 
 
