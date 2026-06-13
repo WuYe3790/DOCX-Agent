@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FileText, X } from "lucide-react";
+import { FileText, X, Download } from "lucide-react";
 import MarkdownRenderer from "./markdown-renderer";
 import DocxPreviewPanel from "./docx-preview-panel";
 import type { DraftFile } from "../lib/draft-types";
@@ -51,6 +52,27 @@ export default function PreviewPanel({
   // 理论上 fetchDrafts() 已经保证一致, 但保险起见 (例如文件被外部删除)
   const activeFile = files.find((f) => f.name === activeFilename) ?? files[0] ?? null;
 
+  // v3.5: showDocxDiagnostics 状态从 DocxPreviewPanel 提升到这里,
+  // 让 ⚠ 诊断按钮能放在 file tab strip 区域 (DOCX 模式下, 与 ✎ N / preview_path / Download 同高),
+  // 避免 DocxPreviewPanel 内部画 header 导致 DOCX 模式主体被下挤 56px.
+  const [showDocxDiagnostics, setShowDocxDiagnostics] = useState(false);
+
+  // v3.5: 新 docx 预览到来时自动展开诊断 (用户想看), 5 秒后自动折叠.
+  // 状态提升后逻辑也在 preview-panel 做 (因为状态在这里).
+  useEffect(() => {
+    if (docxPreviewInfo && docxPreviewInfo.diagnostics.length > 0) {
+      setShowDocxDiagnostics(true);
+      const t = setTimeout(() => setShowDocxDiagnostics(false), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [docxPreviewInfo?.preview_path, docxPreviewInfo?.diagnostics.length]);
+
+  // v3.5: modifiedCount 上提 (供 docx 信息条用)
+  const docxModifiedCount = useMemo(
+    () => (docxPreviewInfo?.paragraph_changes ?? []).filter((c) => c.before !== c.after).length,
+    [docxPreviewInfo],
+  );
+
   return (
     <AnimatePresence initial={false}>
       {show && (
@@ -91,10 +113,10 @@ export default function PreviewPanel({
                 <button
                   type="button"
                   onClick={() => onPreviewModeChange("md")}
-                  className={`px-3 py-1.5 text-[12px] font-medium font-mono rounded-md transition-all duration-200 ${
+                  className={`inline-flex items-center h-8 px-3 text-[12px] font-medium font-mono rounded-md transition-all duration-200 border bg-white dark:bg-zinc-800 ${
                     previewMode === "md"
-                      ? "bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-sm"
-                      : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                      ? "border-slate-300 dark:border-zinc-600 text-indigo-600 dark:text-indigo-400"
+                      : "border-slate-200 dark:border-zinc-700 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
                   }`}
                   data-testid="preview-mode-md"
                 >
@@ -103,10 +125,10 @@ export default function PreviewPanel({
                 <button
                   type="button"
                   onClick={() => onPreviewModeChange("docx")}
-                  className={`px-3 py-1.5 text-[12px] font-medium font-mono rounded-md transition-all duration-200 ${
+                  className={`inline-flex items-center h-8 px-3 text-[12px] font-medium font-mono rounded-md transition-all duration-200 border bg-white dark:bg-zinc-800 ${
                     previewMode === "docx"
-                      ? "bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-sm"
-                      : "text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                      ? "border-slate-300 dark:border-zinc-600 text-indigo-600 dark:text-indigo-400"
+                      : "border-slate-200 dark:border-zinc-700 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200"
                   }`}
                   data-testid="preview-mode-docx"
                 >
@@ -120,10 +142,14 @@ export default function PreviewPanel({
               </div>
             </div>
 
-            {/* Tab Strip — 极简白底卡片激活, 三层 CSS 隐藏滚动条 */}
-            {previewMode === "md" && files.length > 0 && (
-              <div className="flex items-center w-full h-10 px-2 bg-slate-100/50 dark:bg-zinc-900/50 border-b border-slate-200/60 dark:border-zinc-800/60 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                <div className="flex items-center gap-1 min-w-max">
+            {/* 文件 tab strip (v3.5: 高度始终 h-10, 内容按 previewMode 切换)
+                - MD + 有文件: 渲染 MD 文件按钮 (选草稿)
+                - DOCX + 有 docxPreviewInfo: 渲染 docx 信息条 (✎ N / ⚠ 诊断 / preview_path / Download)
+                - 其它: 空白占位
+                关键: 容器始终 h-10 + shrink-0, 切 tab 时主体内容位置不变. */}
+            <div className="h-10 shrink-0 bg-slate-100/50 dark:bg-zinc-900/50 border-b border-slate-200/60 dark:border-zinc-800/60 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              {previewMode === "md" && files.length > 0 ? (
+                <div className="flex items-center gap-1 min-w-max h-10 px-2">
                   {files.map((file) => (
                     <button
                       key={file.name}
@@ -139,8 +165,51 @@ export default function PreviewPanel({
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : previewMode === "docx" && docxPreviewInfo ? (
+                <div className="flex items-center gap-2 min-w-max h-10 px-3 text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+                  <span
+                    className="truncate max-w-[40%]"
+                    title={docxPreviewInfo.preview_path}
+                    data-testid="docx-preview-path"
+                  >
+                    {docxPreviewInfo.preview_path}
+                  </span>
+                  {docxModifiedCount > 0 && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300"
+                      data-testid="docx-modified-count"
+                    >
+                      ✎ {docxModifiedCount} 处修改
+                    </span>
+                  )}
+                  {docxPreviewInfo.diagnostics.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowDocxDiagnostics((v) => !v)}
+                      className={`shrink-0 px-1.5 py-0.5 rounded transition-colors ${
+                        showDocxDiagnostics
+                          ? "bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200"
+                          : "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200/70"
+                      }`}
+                      title={showDocxDiagnostics ? "折叠诊断" : "展开诊断"}
+                      data-testid="diagnostics-toggle"
+                    >
+                      ⚠ {docxPreviewInfo.diagnostics.length} 诊断
+                    </button>
+                  )}
+                  {sessionId && (
+                    <a
+                      href={`/api/word/preview?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(docxPreviewInfo.preview_path)}&v=${docxPreviewInfo.docx_mtime_ms}&download=1`}
+                      className="ml-auto shrink-0 p-1 rounded hover:bg-slate-200/70 dark:hover:bg-zinc-800/70 text-slate-500 dark:text-zinc-400"
+                      aria-label="下载 docx"
+                      title="下载原始 docx"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                </div>
+              ) : null}
+            </div>
 
             {/* 主体: 根据 previewMode 切换 MD / DOCX */}
             {previewMode === "md" ? (
@@ -165,6 +234,8 @@ export default function PreviewPanel({
                 sessionId={sessionId ?? null}
                 info={docxPreviewInfo}
                 onClose={onClose}
+                showDiagnostics={showDocxDiagnostics}
+                onShowDiagnosticsChange={setShowDocxDiagnostics}
               />
             )}
           </div>
