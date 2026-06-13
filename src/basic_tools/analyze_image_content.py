@@ -1,12 +1,12 @@
 import json
 import os
 import sys
-import base64
 from pathlib import Path
 
 # v2: 沙箱化
 sys.path.append(str(Path(__file__).parent.parent))
 from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
+from ._media import build_vision_user_message  # noqa: E402  (Step 2 重构)
 
 try:
     from llm_adapter import LLMClientAdapter
@@ -22,7 +22,9 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def analyze_image_content(session_id: str, image_path: str, query: str = "分析图片内容") -> str:
-    """v2: 多模态图像内容识别 — 路径走沙箱校验, 限制 10MB"""
+    """v2: 多模态图像内容识别 — 路径走沙箱校验, 限制 10MB
+    Step 2: 复用 _media.build_vision_user_message 构造消息 (消除内联 base64 + mime 逻辑)
+    """
     try:
         img_file = resolve_workspace_path(session_id, image_path, must_exist=True, must_be_file=True)
     except WorkspacePathError as e:
@@ -40,27 +42,6 @@ def analyze_image_content(session_id: str, image_path: str, query: str = "分析
         }, ensure_ascii=False, indent=2)
 
     try:
-        with open(img_file, "rb") as f:
-            base64_str = base64.b64encode(f.read()).decode("utf-8")
-    except Exception as exc:
-        return json.dumps({
-            "status": "error",
-            "message": f"Failed to read/encode image file '{image_path}': {exc}"
-        }, ensure_ascii=False, indent=2)
-
-    ext = img_file.suffix.lower()
-    if ext in {".jpg", ".jpeg"}:
-        mime_type = "image/jpeg"
-    elif ext == ".png":
-        mime_type = "image/png"
-    elif ext in {".gif"}:
-        mime_type = "image/gif"
-    elif ext in {".webp"}:
-        mime_type = "image/webp"
-    else:
-        mime_type = "image/png"
-
-    try:
         adapter = LLMClientAdapter()
         vision_adapter = pick_capable_adapter(adapter, "vision")
         if vision_adapter is None:
@@ -72,16 +53,11 @@ def analyze_image_content(session_id: str, image_path: str, query: str = "分析
                 )
             }, ensure_ascii=False, indent=2)
 
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": query},
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_str}"}}
-            ]
-        }]
+        # Step 2: 复用 build_vision_user_message (之前内联在 75-81 行, 现抽出共享)
+        message = build_vision_user_message(text=query, image_path=img_file)
 
         response = vision_adapter.create_chat_completion(
-            messages=messages,
+            messages=[message],
             reasoning_effort="none"
         )
         content = response.choices[0].message.content
