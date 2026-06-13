@@ -230,10 +230,12 @@ export default function DocxPreviewPanel({
           否则 useDocxPreview hook 在 status="loading" 时拿不到 bodyRef.current,
           waitForRef 超时 → setStatus("error") → 前端报"无法加载预览"
           (后端 200 OK 但前端失败的死锁; commit 52c3393 改成条件渲染时引入,
-          此处恢复). IdleState/LoadingSkeleton 是覆盖层, 与本容器并存不冲突. */}
-      <div
-        className={`flex-1 overflow-y-auto p-4 md:p-6 ${status === "ready" ? "" : "hidden"}`}
-      >
+          此处恢复). IdleState/LoadingSkeleton 是覆盖层, 与本容器并存不冲突.
+
+          v3.6: 外层 flex-1 overflow-y-auto p-4 md:p-6 由 preview-panel.tsx 提供,
+          此处只保留 hidden 切换 + 卡片 + bodyRef div, 与 idle/loading/fallback
+          子组件结构对齐. */}
+      <div className={status === "ready" ? "" : "hidden"}>
         <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40">
           <div
             ref={bodyRef}
