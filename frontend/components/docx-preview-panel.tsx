@@ -257,37 +257,37 @@ export default function DocxPreviewPanel({
 
 function IdleState() {
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6">
-      <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[400px] border border-slate-200/40 dark:border-zinc-800/40 flex flex-col items-center justify-center text-center">
-        <FileText className="w-12 h-12 mb-3 opacity-30 text-slate-400 dark:text-zinc-500" />
-        <p className="text-sm font-medium text-slate-500 dark:text-zinc-400">
-          暂无 DOCX 预览
-        </p>
-        <p className="text-xs mt-2 text-slate-400 dark:text-zinc-500 max-w-sm leading-relaxed">
-          等待 LLM 完成首次 markdown_to_word 编辑后, 这里会自动出现最近编辑结果.
-          <br />
-          也可以切换到 &quot;草稿 (MD)&quot; tab 查看 markdown 草稿.
-        </p>
-      </div>
+    // v3.6: 外层 flex-1 overflow-y-auto p-4 md:p-6 由 preview-panel.tsx 提供,
+    // 此处只渲染卡片本体; min-h 与 MD 模式对齐 (400 → 800), 防止切 tab 时卡片跳动.
+    <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40 flex flex-col items-center justify-center text-center">
+      <FileText className="w-12 h-12 mb-3 opacity-30 text-slate-400 dark:text-zinc-500" />
+      <p className="text-sm font-medium text-slate-500 dark:text-zinc-400">
+        暂无 DOCX 预览
+      </p>
+      <p className="text-xs mt-2 text-slate-400 dark:text-zinc-500 max-w-sm leading-relaxed">
+        等待 LLM 完成首次 markdown_to_word 编辑后, 这里会自动出现最近编辑结果.
+        <br />
+        也可以切换到 &quot;草稿 (MD)&quot; tab 查看 markdown 草稿.
+      </p>
     </div>
   );
 }
 
 function LoadingSkeleton() {
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6">
-      <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40 space-y-4">
-        <div className="h-6 w-1/3 bg-slate-200 dark:bg-zinc-800 rounded animate-pulse" />
-        <div className="h-4 w-full bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
-        <div className="h-4 w-5/6 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
-        <div className="h-4 w-4/6 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
-        <div className="h-32 w-full bg-slate-50 dark:bg-zinc-900/50 rounded animate-pulse" />
-        <div className="h-4 w-full bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
-        <div className="h-4 w-3/4 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
-        <p className="text-xs text-center text-slate-400 dark:text-zinc-500 mt-8">
-          正在加载 DOCX 预览...
-        </p>
-      </div>
+    // v3.6: 外层 flex-1 overflow-y-auto p-4 md:p-6 由 preview-panel.tsx 提供,
+    // 此处只渲染卡片本体; min-h-[800px] 保持与 MD 模式一致.
+    <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-950 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-slate-200/40 dark:border-zinc-800/40 space-y-4">
+      <div className="h-6 w-1/3 bg-slate-200 dark:bg-zinc-800 rounded animate-pulse" />
+      <div className="h-4 w-full bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
+      <div className="h-4 w-5/6 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
+      <div className="h-4 w-4/6 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
+      <div className="h-32 w-full bg-slate-50 dark:bg-zinc-900/50 rounded animate-pulse" />
+      <div className="h-4 w-full bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
+      <div className="h-4 w-3/4 bg-slate-100 dark:bg-zinc-900 rounded animate-pulse" />
+      <p className="text-xs text-center text-slate-400 dark:text-zinc-500 mt-8">
+        正在加载 DOCX 预览...
+      </p>
     </div>
   );
 }
@@ -316,18 +316,18 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
 
 function FallbackState({ text }: { text: string }) {
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6">
-      <div className="max-w-3xl mx-auto bg-amber-50/40 dark:bg-amber-950/20 shadow-sm rounded-md p-8 md:p-12 min-h-[400px] border border-amber-200/40 dark:border-amber-800/40">
-        <div className="flex items-center gap-2 mb-4">
-          <AlertTriangle className="w-4 h-4 text-amber-500" />
-          <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300">
-            渲染降级
-          </h3>
-        </div>
-        <pre className="text-xs text-slate-600 dark:text-slate-400 whitespace-pre-wrap font-mono">
-          {text}
-        </pre>
+    // v3.6: 外层 flex-1 overflow-y-auto p-4 md:p-6 由 preview-panel.tsx 提供,
+    // 此处只渲染卡片本体; min-h 与 MD 模式对齐 (400 → 800).
+    <div className="max-w-3xl mx-auto bg-amber-50/40 dark:bg-amber-950/20 shadow-sm rounded-md p-8 md:p-12 min-h-[800px] border border-amber-200/40 dark:border-amber-800/40">
+      <div className="flex items-center gap-2 mb-4">
+        <AlertTriangle className="w-4 h-4 text-amber-500" />
+        <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+          渲染降级
+        </h3>
       </div>
+      <pre className="text-xs text-slate-600 dark:text-slate-400 whitespace-pre-wrap font-mono">
+        {text}
+      </pre>
     </div>
   );
 }
