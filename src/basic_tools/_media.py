@@ -48,19 +48,24 @@ _DEFAULT_MIME = "image/png"
 
 
 def download_to_workspace(session_id: str, url: str, filename: str) -> str:
-    """下载远程图片到 out/sessions/<id>/workspace/media/<filename>,返回相对路径。
+    """下载远程图片到 out/sessions/<id>/workspace/media/<filename>,返回**绝对路径**。
 
     用途:
         - generate_image 工具: 下载 sensenova-u1-fast 返回的 CDN URL
-        - image_refiner sub-agent: 下载每次重生成的新图
+        - image_refiner sub-agent: 下载每次重生成的新图 (handler 内需要读文件字节)
 
     返回:
-        相对于 workspace 根的路径 (例如 "media/rag.png"),供 markdown 语法引用:
-            ![图|描述](media/rag.png)
+        绝对路径字符串,供 encode_image_as_data_url 等需要 open() 的下游使用。
+
+    调用方负责在 markdown 嵌入时转换为相对路径:
+        abs_path = download_to_workspace(...)
+        rel_path = os.path.relpath(abs_path, workspace_dir)
+        markdown_text = f"![图]({rel_path})"
 
     异常:
         urllib.error.URLError: 网络错误或 URL 不可达
         WorkspacePathError:   filename 含路径分隔符或越界
+        ValueError:           filename 防御性校验失败
     """
     workspace = resolve_workspace_path(session_id, "")
     media_dir = workspace / "media"
@@ -76,8 +81,8 @@ def download_to_workspace(session_id: str, url: str, filename: str) -> str:
     # urllib.request.urlretrieve 直接写入磁盘,无需先读后写
     urllib.request.urlretrieve(url, target)
 
-    # 返回相对路径 (markdown 语法可直接引用)
-    return str(target.relative_to(workspace))
+    # 返回绝对路径 — 下游 (image_refiner) 需要 open() 读文件字节
+    return str(target.resolve())
 
 
 def encode_image_as_data_url(absolute_path: str | Path) -> str:
