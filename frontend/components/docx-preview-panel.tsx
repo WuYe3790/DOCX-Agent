@@ -12,7 +12,7 @@
 //   - 本组件负责把这些渲染成 A4 卡片 + 顶部 diff 计数 + 右侧 diagnostics 浮层
 
 import { useEffect, useMemo, useState } from "react";
-import { FileText, X, AlertCircle, AlertTriangle, Info, Download, ChevronRight } from "lucide-react";
+import { FileText, X, AlertCircle, AlertTriangle, Info } from "lucide-react";
 import { useDocxPreview } from "../hooks/use-docx-preview";
 import type {
   DocxDiagnostic,
@@ -24,6 +24,11 @@ interface DocxPreviewPanelProps {
   sessionId: string | null;
   info: DocxPreviewReady | null;
   onClose: () => void;
+  // v3.5: DiagnosticDrawer 开关提升到 preview-panel,
+  // 让 ⚠ N 诊断 按钮能放在 file tab strip 区域 (与 ✎ N / preview_path / Download 同高度),
+  // 避免在 DocxPreviewPanel 内部多画一个 header 导致 DOCX 模式主体被下挤 56px.
+  showDiagnostics: boolean;
+  onShowDiagnosticsChange: (show: boolean) => void;
 }
 
 export default function DocxPreviewPanel({
@@ -31,6 +36,8 @@ export default function DocxPreviewPanel({
   sessionId,
   info,
   onClose,
+  showDiagnostics,
+  onShowDiagnosticsChange,
 }: DocxPreviewPanelProps) {
   const {
     status,
@@ -135,18 +142,17 @@ export default function DocxPreviewPanel({
     [paragraphChanges],
   );
 
-  // v3.1: 诊断面板默认折叠, 避免挡视野
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  // v3.5: showDiagnostics 状态提升到 preview-panel (避免在内部 header 重复画 chrome).
   // 新一次 preview 进来时自动重新展开 (用户想看), 5 秒后自动折叠
   useEffect(() => {
     if (status === "ready" && diagnostics.length > 0) {
       // 合法模式: 状态机由 input 驱动 (status/diagnostics 变化时重置 + 5s timeout)
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setShowDiagnostics(true);
-      const t = setTimeout(() => setShowDiagnostics(false), 5000);
+      onShowDiagnosticsChange(true);
+      const t = setTimeout(() => onShowDiagnosticsChange(false), 5000);
       return () => clearTimeout(t);
     }
-  }, [status, diagnostics.length]);
+  }, [status, diagnostics.length, onShowDiagnosticsChange]);
 
   if (!show) return null;
 
@@ -205,61 +211,6 @@ export default function DocxPreviewPanel({
         }
       `}</style>
 
-      {/* === Header === */}
-      <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200/60 dark:border-zinc-800/60 shrink-0 bg-white/40 dark:bg-zinc-900/40">
-        <div className="flex items-center gap-2 min-w-0">
-          <FileText className="w-4 h-4 text-indigo-400 dark:text-indigo-500 shrink-0" />
-          <span className="text-xs font-mono font-semibold text-slate-700 dark:text-zinc-200 uppercase tracking-wider shrink-0">
-            DOCX 实时
-          </span>
-          {info && (
-            <span className="text-[10px] font-mono text-slate-500 dark:text-zinc-400 truncate" title={info.preview_path}>
-              {info.preview_path}
-            </span>
-          )}
-          {modifiedCount > 0 && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 shrink-0">
-              ✎ {modifiedCount} 处修改
-            </span>
-          )}
-          {diagnostics.length > 0 && status === "ready" && (
-            <button
-              type="button"
-              onClick={() => setShowDiagnostics((v) => !v)}
-              className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 transition-colors ${
-                showDiagnostics
-                  ? "bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200"
-                  : "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200/70"
-              }`}
-              title={showDiagnostics ? "折叠诊断" : "展开诊断"}
-              data-testid="diagnostics-toggle"
-            >
-              ⚠ {diagnostics.length} 诊断
-              <ChevronRight className={`inline w-3 h-3 ml-0.5 transition-transform ${showDiagnostics ? "rotate-90" : ""}`} />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {info && sessionId && (
-            <a
-              href={`/api/word/preview?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(info.preview_path)}&v=${info.docx_mtime_ms}&download=1`}
-              className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400"
-              aria-label="下载 docx"
-              title="下载原始 docx"
-            >
-              <Download className="w-4 h-4" />
-            </a>
-          )}
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400"
-            aria-label="关闭预览"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
       {/* === 状态层: idle / loading / error / fallback === */}
       {status === "idle" && <IdleState />}
       {status === "loading" && <LoadingSkeleton />}
@@ -287,14 +238,6 @@ export default function DocxPreviewPanel({
           <div
             ref={bodyRef}
             className="docx docx-preview-body"
-            onClick={(e) => {
-              // 点击段落时, 滚动到下一个 modified 段
-              const target = (e.target as HTMLElement).closest("p[data-preview-state='modified']") as HTMLElement | null;
-              if (target) {
-                const idx = Number(target.getAttribute("data-paragraph-index"));
-                scrollToHighlight(idx);
-              }
-            }}
           />
         </div>
       </div>
@@ -303,7 +246,7 @@ export default function DocxPreviewPanel({
       {status === "ready" && diagnostics.length > 0 && showDiagnostics && (
         <DiagnosticDrawer
           diagnostics={diagnostics}
-          onClose={() => setShowDiagnostics(false)}
+          onClose={() => onShowDiagnosticsChange(false)}
         />
       )}
     </div>
