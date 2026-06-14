@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 sys.path.append(str(Path(__file__).parent.parent))
 from llm_adapter import LLMClientAdapter  # noqa: E402
 from llm_adapter.constants import SENSENOVA_U1_VALID_SIZES  # noqa: E402
+from llm_adapter.registry import pick_capable_adapter  # noqa: E402
 from ._media import download_to_workspace  # noqa: E402
 from agents.image_refiner import run_image_refinement_loop  # noqa: E402
 
@@ -85,8 +86,20 @@ def generate_image(
 
     # === Step 1: 调生图 API 生成初始图 ===
     try:
-        adapter = LLMClientAdapter()
-        resp = adapter.create_image_generation(prompt=prompt, size=size, n=1)
+        # 用 pick_capable_adapter 自动路由到具备 text_to_image capability 的 provider
+        # 例如当前 provider 是 deepseek (无生图能力),会自动切换到 sensenova
+        main_adapter = LLMClientAdapter()
+        img_adapter = pick_capable_adapter(main_adapter, "text_to_image")
+        if img_adapter is None:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"当前激活的 provider '{main_adapter.get_provider()}' 不支持生图,"
+                    "且 config.json 的 providers 中未配置任何具备 text_to_image capability 的模型。"
+                ),
+            }, ensure_ascii=False)
+
+        resp = img_adapter.create_image_generation(prompt=prompt, size=size, n=1)
         img_url = resp.data[0].url
     except Exception as exc:
         logger.exception("generate_image initial failed")

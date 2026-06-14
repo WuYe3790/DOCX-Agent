@@ -160,8 +160,15 @@ def _exec_regenerate_image(args: dict, ctx: _RefineContext) -> dict:
     reason = args.get("reason", "")
     logger.info("subagent_regenerate iteration=%d reason=%s", ctx.iteration_count + 1, reason[:80])
 
-    adapter = LLMClientAdapter()
-    resp = adapter.create_image_generation(prompt=new_prompt, size=ctx.size)
+    # 自动路由到具备 text_to_image capability 的 provider (与 generate_image 主工具一致)
+    main_adapter = LLMClientAdapter()
+    img_adapter = pick_capable_adapter(main_adapter, "text_to_image")
+    if img_adapter is None:
+        raise RuntimeError(
+            f"当前 provider '{main_adapter.get_provider()}' 不支持生图,"
+            "且 config.json 中无 text_to_image capability 的 provider。"
+        )
+    resp = img_adapter.create_image_generation(prompt=new_prompt, size=ctx.size)
     img_url = resp.data[0].url
 
     # 覆盖写回 workspace (filename 不变, 实现"原地替换")

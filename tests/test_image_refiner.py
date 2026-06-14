@@ -110,26 +110,30 @@ class TestImageRefinementLoop(unittest.TestCase):
         """返回 context manager 字典,统一 patch 外部依赖。
 
         关键:
-        - vision_adapter 是局部变量,通过 patch pick_capable_adapter 间接替换
+        - pick_capable_adapter 用 side_effect 根据 capability 返回不同 fake:
+          vision → fake_vision_adapter, text_to_image → fake_image_adapter
         - encode_image_as_data_url 需要实际文件,patch 返回假 base64
-        - _exec_regenerate_image 内部创建 LLMClientAdapter,patch 它返回 fake
         """
         if download_returns is None:
-            # 默认 3 次下载 (img2/3/4),模拟初始图 img1 后的 regenerate 序列
             download_returns = [
                 f"/workspace/media/img{i}.png" for i in range(2, 5)
             ]
         fake_vision = MagicMock()
         fake_vision.create_chat_completion.side_effect = vision_responses
-        # fake LLMClientAdapter for _exec_regenerate_image handler
-        fake_adapter_instance = MagicMock()
+        fake_image_adapter = MagicMock()
         fake_image_response = MagicMock()
         fake_image_response.data = [MagicMock(url="https://fake.cdn/img.png")]
-        fake_adapter_instance.create_image_generation.return_value = fake_image_response
+        fake_image_adapter.create_image_generation.return_value = fake_image_response
+        def pick_capable_side_effect(main_adapter, capability):
+            if capability == "vision":
+                return fake_vision
+            if capability == "text_to_image":
+                return fake_image_adapter
+            return None
         return {
             "pick_capable": patch(
                 "agents.image_refiner.pick_capable_adapter",
-                return_value=fake_vision,
+                side_effect=pick_capable_side_effect,
             ),
             "download": patch(
                 "agents.image_refiner.download_to_workspace",
@@ -138,10 +142,6 @@ class TestImageRefinementLoop(unittest.TestCase):
             "encode": patch(
                 "agents.image_refiner.encode_image_as_data_url",
                 return_value="data:image/png;base64,FAKE_BASE64_DATA",
-            ),
-            "llm_adapter": patch(
-                "agents.image_refiner.LLMClientAdapter",
-                return_value=fake_adapter_instance,
             ),
         }
 
@@ -172,7 +172,7 @@ class TestImageRefinementLoop(unittest.TestCase):
         ]
         patches = self._patch_loop(vision_responses)
 
-        with patches["pick_capable"], patches["download"], patches["encode"], patches["llm_adapter"]:
+        with patches["pick_capable"], patches["download"], patches["encode"]:
             result = run_image_refinement_loop(
                 session_id="sess_1",
                 initial_prompt="画一张 RAG 架构图",
@@ -202,7 +202,7 @@ class TestImageRefinementLoop(unittest.TestCase):
             "/workspace/media/img1.png",  # 没下载
         ])
 
-        with patches["pick_capable"], patches["download"], patches["encode"], patches["llm_adapter"]:
+        with patches["pick_capable"], patches["download"], patches["encode"]:
             result = run_image_refinement_loop(
                 session_id="sess_1",
                 initial_prompt="画图",
@@ -228,7 +228,7 @@ class TestImageRefinementLoop(unittest.TestCase):
             f"/workspace/media/img{i}.png" for i in range(2, 6)
         ])
 
-        with patches["pick_capable"], patches["download"], patches["encode"], patches["llm_adapter"]:
+        with patches["pick_capable"], patches["download"], patches["encode"]:
             result = run_image_refinement_loop(
                 session_id="sess_1",
                 initial_prompt="画图",
@@ -271,7 +271,7 @@ class TestImageRefinementLoop(unittest.TestCase):
             download_returns=[f"/workspace/media/img{i}.png" for i in range(2, 6)],
         )
 
-        with patches["pick_capable"], patches["download"], patches["encode"], patches["llm_adapter"]:
+        with patches["pick_capable"], patches["download"], patches["encode"]:
             run_image_refinement_loop(
                 session_id="sess_1",
                 initial_prompt="画图",
@@ -309,7 +309,7 @@ class TestImageRefinementLoop(unittest.TestCase):
         ])
 
         with self.assertLogs("agents.image_refiner", level="INFO") as log_ctx:
-            with patches["pick_capable"], patches["download"], patches["encode"], patches["llm_adapter"]:
+            with patches["pick_capable"], patches["download"], patches["encode"]:
                 run_image_refinement_loop(
                     session_id="sess_1",
                     initial_prompt="画图",
