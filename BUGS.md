@@ -96,6 +96,87 @@ def json_result(data) -> str:
 
 ---
 
+## Bug #2: `set_paragraph_indent` 工具不解析 workspace 路径就传给底层 op
+
+**发现时间**: 2026-06-14
+**发现途径**: `tests/test_paragraph_format_ops.py` PR-1.2 — 准备测试时直接调工具触发
+**严重程度**: 高 — 工具**根本无法工作**, 调一次 FileNotFoundError
+**影响范围**: 所有走 `set_paragraph_indent` 工具的代码路径
+
+### 复现
+
+```python
+import sys
+sys.path.insert(0, "src")
+from docx_tools.set_paragraph_indent import set_paragraph_indent
+
+# 任何调用都抛 FileNotFoundError
+result = set_paragraph_indent(
+    session_id="any", docx_path="in.docx", output_path="out.docx",
+    paragraph_index=1, left_twips=720,
+)
+# 抛: FileNotFoundError: [Errno 2] No such file or directory: 'in.docx'
+```
+
+### 根本原因
+
+`src/docx_tools/set_paragraph_indent.py:19-26` 的 wrapper 调了 `resolve_docx_io` (line 17),
+但**解析后的绝对路径没传给 op**, op 仍收到原始相对路径:
+
+```python
+# src/docx_tools/set_paragraph_indent.py:17-26
+input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+# ↑ input_path 是绝对路径, 但下面传的还是 docx_path (相对)
+try:
+    result = set_paragraph_indent_op(
+        docx_path=docx_path,          # ← BUG: 相对路径
+        output_path=output_path,      # ← BUG: 相对路径
+        paragraph_index=paragraph_index,
+        left_twips=left_twips, ...
+    )
+```
+
+而 `set_paragraph_indent_op` (src/docx_compiler/table_ops.py:9, 29) 用这两个相对路径做 I/O:
+
+```python
+# src/docx_compiler/table_ops.py:9
+root = load_document_xml(docx_path)  # ← 打开 "in.docx", 找不到
+# ...
+# src/docx_compiler/table_ops.py:29
+write_document_xml(docx_path, output_path, root)  # ← 写到 "out.docx", 写到 cwd 而非 workspace
+```
+
+对比正常工具 (`insert_paragraph_after`, `set_text_format` 等), wrapper 都用 `resolve_docx_io`
+解析后再 `load_document_xml(str(input_path))` 和 `write_document_xml(str(input_path), str(output_path_resolved), root)`.
+
+### 建议修法
+
+修改 `src/docx_tools/set_paragraph_indent.py:19-26`, 传 `str(input_path)` / `str(output_path_resolved)`:
+
+```python
+result = set_paragraph_indent_op(
+    docx_path=str(input_path),        # FIX: 用解析后的绝对路径
+    output_path=str(output_path_resolved),  # FIX: 同上
+    paragraph_index=paragraph_index,
+    left_twips=left_twips, ...
+)
+```
+
+### 验证
+
+修完后, 跑 `tests/test_paragraph_format_ops.py` 的 `TestSetParagraphIndent` 5 个 case (它们当前都 `@pytest.mark.xfail`), 去掉 xfail 标记后应全过。
+
+### 相关测试
+
+- `tests/test_paragraph_format_ops.py::TestSetParagraphIndent` — 5 个 case, 全部 xfail
+  - `test_left_indent_sets_w_ind_left`
+  - `test_first_line_indent_sets_w_ind_first_line`
+  - `test_hanging_indent_sets_w_ind_hanging`
+  - `test_all_none_omits_w_ind`
+  - `test_out_of_range_paragraph_index`
+
+---
+
 ## 添加新 bug 条目的模板
 
 ```markdown
