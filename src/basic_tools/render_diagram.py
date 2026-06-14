@@ -386,6 +386,11 @@ tools_schema = {
             "用途: 流程图、状态机、架构图、组织结构图、依赖关系图、决策树、时序图、类图等"
             "「有逻辑结构」的图。相对于 generate_image (像素级写实图) 的优势:"
             "节点位置精确、箭头方向正确、文字不模糊、可指定子图嵌套与样式。"
+            "⭐ **默认且强烈优先用 graphviz (DOT) 语法** —— Graphviz 的布局算法更成熟, "
+            "节点对齐、箭头走向、子图嵌套都更精确, 视觉效果显著更美观。Mermaid 仅在"
+            "以下场景使用: (a) 用户明确点名要 Mermaid; (b) 需要甘特图 (gantt) —— "
+            "DOT 不擅长甘特图。其他所有场景 (包括时序图、类图、状态图、ER 图) "
+            "都用 graphviz 写, 不要选 Mermaid。"
             "⚠️ 拿到 path 后, 你必须在 Markdown 草稿中用标准图片语法嵌入, 格式严格为: "
             "`![图表说明|center](返回的path)`, 随后再调用 insert_image_after_paragraph 把图"
             "插入到 Word。仅写了路径而不在草稿里引用, 等于图被藏在沙箱里, 用户看不到。"
@@ -400,10 +405,14 @@ tools_schema = {
                     "enum": ["graphviz", "mermaid"],
                     "default": "graphviz",
                     "description": (
-                        "图表语法。graphviz (DOT) 推荐用于: 流程图、状态机、架构图、"
-                        "组织结构、依赖关系、决策树、网络拓扑等节点-边模型。"
-                        "mermaid 推荐用于: sequenceDiagram (时序图)、gantt (甘特图)、"
-                        "classDiagram、stateDiagram-v2、erDiagram、pie。"
+                        "⭐ 图表语法 —— **默认且强烈优先用 graphviz (DOT)**。"
+                        "Graphviz 的布局算法 (dot/neato/fdp/sfdp/twopi/circo) 比 Mermaid "
+                        "成熟得多, 节点对齐、箭头走向、子图嵌套精确, 视觉效果显著更美观。"
+                        "适用于流程图、状态机、架构图、组织结构、依赖关系、决策树、网络拓扑、"
+                        "时序图、类图、ER 图、状态图等几乎所有节点-边模型 —— 都用 graphviz。"
+                        "只有这两种情况才选 mermaid: (a) 用户明确点名要 mermaid; "
+                        "(b) 需要甘特图 (gantt chart) —— DOT 不擅长这个。"
+                        "在没有以上情况时, 你必须选 graphviz, 不要选 mermaid。"
                     ),
                 },
                 "source": {
