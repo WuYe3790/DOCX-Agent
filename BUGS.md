@@ -177,6 +177,95 @@ result = set_paragraph_indent_op(
 
 ---
 
+## Bug #3: 4 个表操作工具不解析 workspace 路径就传底层 op
+
+**发现时间**: 2026-06-14
+**发现途径**: `tests/test_table_ops.py` PR-2.1 — 准备测试时扫 9 个表工具源码
+**严重程度**: 高 — 4 个工具完全无法工作, 调一次 FileNotFoundError
+**影响范围**: 9 个表操作工具中 4 个无法工作:
+
+| 工具 | 状态 |
+|---|---|
+| `insert_table_row_after`     | ✅ 正确 |
+| `insert_table_column_after`  | ❌ BUG #3 |
+| `delete_table_row`           | ✅ 正确 |
+| `clear_table_cell`           | ✅ 正确 |
+| `replace_table_cell_text`    | ✅ 正确 |
+| `insert_text_in_table_cell`  | ✅ 正确 |
+| `insert_table_after_paragraph` | ❌ BUG #3 |
+| `insert_table_in_cell`       | ❌ BUG #3 |
+| `merge_table_cells_horizontal` | ❌ BUG #3 |
+
+### 复现
+
+任何上述 ❌ 工具的调用:
+
+```python
+import sys
+sys.path.insert(0, "src")
+from docx_tools.insert_table_column_after import insert_table_column_after
+
+result = insert_table_column_after(
+    session_id="any", docx_path="in.docx", output_path="out.docx",
+    table_index=1, column_index=1,
+)
+# 抛: FileNotFoundError: [Errno 2] No such file or directory: 'in.docx'
+```
+
+### 根本原因
+
+跟 Bug #2 同一个模式: 4 个 wrapper 调了 `resolve_docx_io` (拿到绝对路径), 但
+**没把绝对路径传给底层 op**, op 仍收到原始相对路径. 例:
+
+```python
+# src/docx_tools/insert_table_column_after.py:17-26
+input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
+try:
+    result = insert_table_column_after_op(
+        docx_path=docx_path,            # ← BUG: 相对路径
+        output_path=output_path,        # ← BUG: 相对路径
+        ...
+    )
+```
+
+而 `insert_table_column_after_op` (src/docx_compiler/table_ops.py) 用这俩相对路径做 I/O.
+
+### 建议修法
+
+4 个工具统一改: 传 `str(input_path)` / `str(output_path_resolved)` 给 op:
+
+```python
+result = insert_table_column_after_op(
+    docx_path=str(input_path),
+    output_path=str(output_path_resolved),
+    ...
+)
+```
+
+**更彻底的修法**: 在 `docx_compiler/table_ops.py` 的 op 函数签名里用绝对路径参数,
+或加类型检查强制 `pathlib.Path`. 或者: 在 server 层 (`src/agent.py` 的 dispatcher)
+加一个"工具必须接收 str 绝对路径"的 lint 规则.
+
+### 验证
+
+修完后, 跑 `tests/test_table_ops.py` 的 4 个 xfail class, 去掉 xfail 标记应全过.
+
+### 相关测试
+
+`tests/test_table_ops.py` — 4 个 class 全部 @pytest.mark.xfail, 共 12 case:
+  - `TestInsertTableColumnAfter` (3 case)
+  - `TestInsertTableAfterParagraph` (3 case)
+  - `TestInsertTableInCell` (2 case)
+  - `TestMergeTableCellsHorizontal` (3 case, 但 span=1 等参数下会立即 raise)
+
+### 元教训
+
+Bug #2 (PR-1.2) 和 Bug #3 (PR-2.1) 是**同一个 anti-pattern 的 5 次重犯**.
+建议后续在 `src/docx_tools/common.py` 加个"底层 op 路径解析"helper, 强制所有
+wrapper 走同一条路径, 避免再次重犯. 或在 CI 加 grep lint: 禁止 `docx_path=docx_path` 这种赋值模式.
+
+---
+
 ## 添加新 bug 条目的模板
 
 ```markdown
