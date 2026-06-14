@@ -30,6 +30,7 @@ MD_DRAFT_TOOL_NAMES = {
     "read",
     "analyze_image_content",
     "generate_image",
+    "render_diagram",
 }
 WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
@@ -42,6 +43,7 @@ WORD_EDITING_TOOL_NAMES = {
     "read",
     "analyze_image_content",
     "generate_image",
+    "render_diagram",
 }
 
 
@@ -94,9 +96,10 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 3. 长正文块可以单独生成 Markdown 文件，例如 experiment_platform.md 等。
 4. 每个片段只写最终要进入 Word 的内容，不要包含编辑计划。
 5. 如果需要插入图片，草稿中应使用标准 Markdown 图片语法：![描述|对齐方式](图片路径)，对齐方式支持 left/center/right，默认 center。例如：![图表说明|center](out/media/image.png)。先用 analyze_image_content 理解图片内容再写描述，不要仅凭文件名猜测。
-6. 如需参考外部代码、报告 md 文件或测试用例等内容作为草稿素材，使用 read 工具读取。
-7. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
-8. 只有在所有规划的草稿文件都通过 write_markdown_draft 写入磁盘后，才允许展示整体草稿结构，并用简短文字告知用户已完成全部草稿的写入，然后停止回答等待用户审核。在用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
+6. 当需要绘制流程图、状态机、架构图、组织结构图、依赖关系图、决策树、时序图、类图等有逻辑结构的图时，优先使用 render_diagram，并且 **强烈优先用 Graphviz DOT 语法**（Graphviz 的布局算法比 Mermaid 成熟得多，节点对齐、箭头走向更精确，视觉效果显著更美观）。Mermaid 仅在用户明确点名要 Mermaid 或需要甘特图（gantt）这类 DOT 不擅长的场景才使用，其他场景一律用 graphviz。**不要用 generate_image 画结构化图**——generate_image 仅用于不可用代码精确描述的写实风格插图。render_diagram 返回的 path 必须在草稿中用 ![描述|center](path) 语法引用，否则图被藏在 workspace 里用户看不到。
+7. 如需参考外部代码、报告 md 文件或测试用例等内容作为草稿素材，使用 read 工具读取。
+8. 写完后用 read_markdown_draft 或 parse_markdown_draft 展示草稿结构，方便用户确认。
+9. 只有在所有规划的草稿文件都通过 write_markdown_draft 写入磁盘后，才允许展示整体草稿结构，并用简短文字告知用户已完成全部草稿的写入，然后停止回答等待用户审核。在用户没有确认前，不要尝试写入 Word，也不要进入下一阶段。
 """.strip()
     else:
         state_rule = """
@@ -111,6 +114,7 @@ def state_prompt(state: str, available_tool_schemas) -> str:
 6. 不要引用 markdown_to_word 返回的 temporary_output_path；多步编辑应放在同一次 markdown_to_word.actions 中。
 7. 如果 Markdown 片段不适合写入，可以用 write_markdown_draft 修订草稿，但不能绕过 markdown_to_word 直接编辑 docx。
 8. 写入后必须调用 diff_docx 验证变化。
+9. 如果草稿中还需要补绘制流程图、状态机、架构图等有逻辑结构的图，优先用 render_diagram，**强烈优先用 Graphviz DOT 语法**（视觉效果显著优于 Mermaid），将返回的 path 用 ![描述|center](path) 语法补进 markdown 草稿后再走 markdown_to_word 编译。Mermaid 仅在用户明确点名或需要甘特图时使用。不要用 generate_image 画这类图（文生图对结构化图节点错位、文字模糊）。
 """.strip()
 
     return f"{state_rule}\n\n当前可用工具：\n{render_tools_prompt(available_tool_schemas)}"

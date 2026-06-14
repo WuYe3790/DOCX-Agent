@@ -34,6 +34,7 @@ SESSION_TOOLS = {
     "read",
     "analyze_image_content",
     "generate_image",  # sensenova-u1-fast 生图, 内部 sub-agent 审核-重画迭代
+    "render_diagram",  # Graphviz/Mermaid via kroki.io, 用于结构化图表
     # v2: docx_tools 读类沙箱化 (Phase 3c)
     "read_docx_structure",
     "find_text",
