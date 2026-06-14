@@ -32,6 +32,9 @@ from llm_adapter.registry import pick_capable_adapter  # noqa: E402
 from ._media import download_to_workspace  # noqa: E402
 from agents.image_refiner import run_image_refinement_loop  # noqa: E402
 
+# 复用 image_refiner 的日志写入函数, 写到同一个 out/sessions/<id>/logs/generate_image.log
+from agents.image_refiner import _emit_progress as _log_progress  # noqa: E402
+
 
 # === 默认参数 ===
 DEFAULT_OUTPUT_FILENAME = "generated.png"
@@ -79,6 +82,8 @@ def generate_image(
             ),
         }, ensure_ascii=False)
 
+    _log_progress(session_id, "tool_start", prompt=prompt[:60], filename=output_filename,
+                  size=size, max_iterations=max_iterations)
     logger.info(
         "generate_image start prompt=%r filename=%s size=%s max_iterations=%d",
         prompt[:80], output_filename, size, max_iterations,
@@ -142,6 +147,8 @@ def generate_image(
     final_abs_path = result["path"]
     final_rel_path = _abs_to_rel(final_abs_path)
 
+    _log_progress(session_id, "tool_done", status=result["status"],
+                  iterations=result["iterations"], path=result["path"])
     logger.info(
         "generate_image done status=%s iterations=%d",
         result["status"], result["iterations"],

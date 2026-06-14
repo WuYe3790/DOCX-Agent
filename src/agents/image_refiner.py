@@ -38,11 +38,35 @@ from basic_tools._media import (  # noqa: E402
     download_to_workspace,
     encode_image_as_data_url,
 )
+from workspace.guard import workspace_dir  # noqa: E402  (Step 10: 写日志到 session 目录)
 
 
 # === 阅后即焚占位符 ===
 # 替换 history 中所有历史 base64 图片,节约 ~3MB/张 的 token 成本
 PLACEHOLDER_HISTORY_IMAGE = "[历史图片已从上下文中移除, 请参考最新注入的图片]"
+
+
+def _emit_progress(session_id: str, event: str, **fields) -> None:
+    """子 agent 进度输出: 追加到 out/sessions/<id>/logs/generate_image.log。
+
+    路径在 session 沙箱内 (与 workspace 平级), 删 session 时日志自动清理。
+    不打 print 是为了终端干净; 直接写文件是为了用户能随时 `tail -f` 查看。
+    失败兜底: 任何 IO 异常都被吞掉, 绝不能影响生图主流程。
+    """
+    import datetime as _dt
+    kv = " ".join(f"{k}={v}" for k, v in fields.items())
+    try:
+        session_root = workspace_dir(session_id).parent  # workspace 的父目录 = session 根
+        log_dir = session_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "generate_image.log"
+        ts = _dt.datetime.now().isoformat(timespec="seconds")
+        line = f"{ts} [{event}] {kv}\n"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass  # 日志失败不影响生图主流程
+    logger.info("generate_image/subagent event=%s %s", event, kv)
 
 
 # === 子 agent 的 system prompt ===
@@ -158,7 +182,7 @@ def _exec_regenerate_image(args: dict, ctx: _RefineContext) -> dict:
     """
     new_prompt = args["new_prompt"]
     reason = args.get("reason", "")
-    logger.info("subagent_regenerate iteration=%d reason=%s", ctx.iteration_count + 1, reason[:80])
+    _emit_progress(ctx.session_id, "regenerate", iter=ctx.iteration_count + 1, reason=reason[:60])
 
     # 自动路由到具备 text_to_image capability 的 provider (与 generate_image 主工具一致)
     main_adapter = LLMClientAdapter()
@@ -187,7 +211,7 @@ def _exec_regenerate_image(args: dict, ctx: _RefineContext) -> dict:
 def _exec_finish_image(args: dict, ctx: _RefineContext) -> dict:
     """审核通过: 设置 finished=True, 主循环下次迭代检测到即退出。"""
     reason = args.get("reason", "")
-    logger.info("subagent_finish iteration=%d reason=%s", ctx.iteration_count, reason[:80])
+    _emit_progress(ctx.session_id, "finish", iter=ctx.iteration_count, reason=reason[:60])
     ctx.finished = True
     ctx.finish_reason = reason
     return {"status": "finished"}
@@ -302,7 +326,7 @@ def run_image_refinement_loop(
             ],
         },
     ]
-    logger.info("subagent_start iteration=1 max_iterations=%d", max_iterations)
+    _emit_progress(session_id, "start", iter=1, max_iterations=max_iterations)
 
     for iteration in range(max_iterations):
         response = vision_adapter.create_chat_completion(
@@ -314,7 +338,7 @@ def run_image_refinement_loop(
 
         # 边界 1: LLM 不调工具只回文本 → 注入引导消息, 继续下一轮
         if not msg.tool_calls:
-            logger.info("subagent_text_only iteration=%d", iteration + 1)
+            _emit_progress(session_id, "text_only", iter=iteration + 1)
             history.append({"role": "assistant", "content": msg.content or ""})
             history.append({
                 "role": "user",
@@ -387,7 +411,7 @@ def run_image_refinement_loop(
             }
 
     # max_iterations 用尽仍未 finish → 返回当前图路径, 主 agent 决定
-    logger.info("subagent_max_iterations iterations=%d", ctx.iteration_count)
+    _emit_progress(session_id, "max_iterations", iterations=ctx.iteration_count)
     return {
         "status": "max_iterations_reached",
         "path": ctx.current_image_path,

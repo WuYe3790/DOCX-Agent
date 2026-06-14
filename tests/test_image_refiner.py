@@ -294,35 +294,60 @@ class TestImageRefinementLoop(unittest.TestCase):
 
     # ─── Test 5: 进度 logging ───
     def test_progress_logging_events(self):
-        """关键事件 (start / regenerate / finish / max_iterations) 应触发 logger"""
-        vision_responses = [
-            _make_assistant_message(tool_calls=[
-                _make_tool_call("regenerate_image", {"new_prompt": "p", "reason": "r"}, "tc1"),
-            ]),
-            _make_assistant_message(tool_calls=[
-                _make_tool_call("finish_image", {"reason": "done"}, "tc2"),
-            ]),
-        ]
-        patches = self._patch_loop(vision_responses, download_returns=[
-            "/workspace/media/img1.png",
-            "/workspace/media/img2.png",
-        ])
+        """关键事件 (start / regenerate / finish) 应:
+        1. 写入 out/sessions/<id>/logs/generate_image.log
+        2. 触发 logger.info (供未来 logging 配置捕获)
+        """
+        import tempfile
+        from pathlib import Path
+        # 用临时目录隔离测试 (避免污染真实 session 目录)
+        old_cwd = Path.cwd()
+        tmpdir = tempfile.mkdtemp(prefix="img_refiner_test_")
+        try:
+            import os
+            os.chdir(tmpdir)
 
-        with self.assertLogs("agents.image_refiner", level="INFO") as log_ctx:
-            with patches["pick_capable"], patches["download"], patches["encode"]:
-                run_image_refinement_loop(
-                    session_id="sess_1",
-                    initial_prompt="画图",
-                    initial_image_path="/workspace/media/img1.png",
-                    filename="img.png",
-                    size="2752x1536",
-                    max_iterations=5,
-                )
+            vision_responses = [
+                _make_assistant_message(tool_calls=[
+                    _make_tool_call("regenerate_image", {"new_prompt": "p", "reason": "r"}, "tc1"),
+                ]),
+                _make_assistant_message(tool_calls=[
+                    _make_tool_call("finish_image", {"reason": "done"}, "tc2"),
+                ]),
+            ]
+            patches = self._patch_loop(vision_responses, download_returns=[
+                "/workspace/media/img1.png",
+                "/workspace/media/img2.png",
+            ])
 
-        log_text = "\n".join(log_ctx.output)
-        self.assertIn("subagent_start", log_text)
-        self.assertIn("subagent_regenerate", log_text)
-        self.assertIn("subagent_finish", log_text)
+            with self.assertLogs("agents.image_refiner", level="INFO") as log_ctx:
+                with patches["pick_capable"], patches["download"], patches["encode"]:
+                    run_image_refinement_loop(
+                        session_id="sess_1",
+                        initial_prompt="画图",
+                        initial_image_path="/workspace/media/img1.png",
+                        filename="img.png",
+                        size="2752x1536",
+                        max_iterations=5,
+                    )
+
+            # 1. 验证 logger 输出
+            log_text = "\n".join(log_ctx.output)
+            self.assertIn("start", log_text)
+            self.assertIn("regenerate", log_text)
+            self.assertIn("finish", log_text)
+
+            # 2. 验证日志文件确实写入了 (用户能 tail -f 看到)
+            log_file = Path(tmpdir) / "out" / "sessions" / "sess_1" / "logs" / "generate_image.log"
+            self.assertTrue(log_file.exists(), f"日志文件未创建: {log_file}")
+            file_content = log_file.read_text(encoding="utf-8")
+            self.assertIn("[start]", file_content)
+            self.assertIn("[regenerate]", file_content)
+            self.assertIn("[finish]", file_content)
+        finally:
+            os.chdir(old_cwd)
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
