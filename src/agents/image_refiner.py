@@ -194,7 +194,7 @@ TOOL_DISPATCH: dict[str, callable] = {
 
 
 # === 阅后即焚 (防止 Context Explosion) ===
-def _strip_old_images(history: list[dict]) -> None:
+def _strip_old_images(history: list) -> None:
     """就地修改 history: 把所有历史 base64 图片替换为占位符文本。
 
     必要性: 一张 2K 图 base64 后 ~2-5MB。若不清理, 5 轮迭代后 history payload
@@ -202,16 +202,37 @@ def _strip_old_images(history: list[dict]) -> None:
 
     替换规则: 任何 role=user 消息里的 image_url content 块都换成 text 占位符。
     其他消息 (system / assistant / tool) 不变。
+
+    兼容性: msg 可以是 dict (production) 或 SimpleNamespace (单元测试),
+    通过 _msg_get 统一访问 role/content/items。
     """
     for msg in history:
-        if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+        role = _msg_get(msg, "role")
+        content = _msg_get(msg, "content")
+        if role == "user" and isinstance(content, list):
             new_content = []
-            for item in msg["content"]:
+            for item in content:
                 if isinstance(item, dict) and item.get("type") == "image_url":
                     new_content.append({"type": "text", "text": PLACEHOLDER_HISTORY_IMAGE})
                 else:
                     new_content.append(item)
-            msg["content"] = new_content
+            # 写回 — dict 直接赋值, SimpleNamespace 通过 _msg_set
+            _msg_set(msg, "content", new_content)
+
+
+def _msg_get(msg, key: str):
+    """统一访问: dict 用 .get(),对象用 getattr。"""
+    if isinstance(msg, dict):
+        return msg.get(key)
+    return getattr(msg, key, None)
+
+
+def _msg_set(msg, key: str, value) -> None:
+    """统一写入: dict 用 [],对象用 setattr。"""
+    if isinstance(msg, dict):
+        msg[key] = value
+    else:
+        setattr(msg, key, value)
 
 
 # === 主循环入口 ===
