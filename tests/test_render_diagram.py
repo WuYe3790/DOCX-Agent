@@ -240,3 +240,143 @@ def test_render_diagram_empty_source(session_id):
         result = json.loads(render_diagram(session_id, empty))
         assert result["status"] == "error"
         assert result["error_type"] == "bad_argument"
+
+
+# ============ 503 重试链路 (Step 11 补全) ============
+
+def test_render_diagram_503_retry_then_success(monkeypatch, session_id):
+    """503 两次后 200: 共调 3 次, 最终成功 (KROKI_MAX_RETRIES = 2)"""
+    monkeypatch.setattr(rd.time, "sleep", lambda s: None)  # 加速测试
+    call_count = {"n": 0}
+
+    def fake_get(url, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            return _make_resp(503, text="upstream timeout")
+        return _make_resp(200, content=_fake_png_bytes())
+
+    monkeypatch.setattr(rd.requests, "get", fake_get)
+    result = json.loads(render_diagram(session_id, "digraph G { A -> B }"))
+    assert result["status"] == "ok"
+    assert call_count["n"] == 3, "应在第 3 次成功 (1 初始 + 2 重试)"
+
+
+def test_render_diagram_503_exhausted(monkeypatch, session_id):
+    """503 连续 (1 初始 + KROKI_MAX_RETRIES 重试) → renderer_unavailable"""
+    monkeypatch.setattr(rd.time, "sleep", lambda s: None)
+    call_count = {"n": 0}
+
+    def fake_get(url, **kwargs):
+        call_count["n"] += 1
+        return _make_resp(503, text="upstream overload")
+
+    monkeypatch.setattr(rd.requests, "get", fake_get)
+    result = json.loads(render_diagram(session_id, "digraph G { A -> B }"))
+    assert result["status"] == "error"
+    assert result["error_type"] == "renderer_unavailable"
+    assert result["http_status"] == 503
+    assert call_count["n"] == 3, "应重试 KROKI_MAX_RETRIES(2) 次, 共 3 次 HTTP 调用"
+
+
+# ============ Timeout / 网络异常 ============
+
+def test_render_diagram_timeout(monkeypatch, session_id):
+    """requests.Timeout 持续 → renderer_unavailable, 经过重试耗尽"""
+    import requests as _real_requests
+    monkeypatch.setattr(rd.time, "sleep", lambda s: None)
+    call_count = {"n": 0}
+
+    def fake_get(url, **kwargs):
+        call_count["n"] += 1
+        raise _real_requests.Timeout("connection timeout")
+
+    monkeypatch.setattr(rd.requests, "get", fake_get)
+    result = json.loads(render_diagram(session_id, "digraph G { A -> B }"))
+    assert result["status"] == "error"
+    assert result["error_type"] == "renderer_unavailable"
+    # 主入口 catch requests.RequestException 后给出"网络异常"消息
+    assert "网络异常" in result["message"]
+    assert call_count["n"] == 3, "Timeout 也应重试 KROKI_MAX_RETRIES 次"
+
+
+def test_render_diagram_connection_error(monkeypatch, session_id):
+    """requests.ConnectionError → renderer_unavailable"""
+    import requests as _real_requests
+    monkeypatch.setattr(rd.time, "sleep", lambda s: None)
+
+    def fake_get(url, **kwargs):
+        raise _real_requests.ConnectionError("DNS resolve failed")
+
+    monkeypatch.setattr(rd.requests, "get", fake_get)
+    result = json.loads(render_diagram(session_id, "digraph G { A -> B }"))
+    assert result["status"] == "error"
+    assert result["error_type"] == "renderer_unavailable"
+
+
+# ============ POST 阈值切换 ============
+
+def test_render_diagram_post_for_large_source(monkeypatch, session_id):
+    """编码后 >= POST_THRESHOLD 时切 POST 路径, GET 一定不被调用"""
+    # 构造一个能突破 POST_THRESHOLD 的源码 (随机化文本对抗 zlib 压缩率)
+    big_source = "digraph G { " + " ".join(
+        f"n{i}_lbl_{hex(i*7919)} [color=\"#{i:06x}\", shape=box];"
+        for i in range(500)
+    ) + " }"
+    encoded_len = len(rd._kroki_encode_source(big_source))
+    assert encoded_len >= rd.POST_THRESHOLD, (
+        f"测试源码不够长触发 POST, encoded_len={encoded_len} < {rd.POST_THRESHOLD}, "
+        f"测试本身需要更多节点 (调高 range)"
+    )
+
+    post_calls = []
+
+    def fake_post(url, **kwargs):
+        post_calls.append((url, kwargs.get("headers", {}).get("Content-Type")))
+        return _make_resp(200, content=_fake_png_bytes())
+
+    monkeypatch.setattr(rd.requests, "post", fake_post)
+    # 反向 assert: 如果代码错误地走了 GET 路径, AssertionError 立刻冒出来
+    monkeypatch.setattr(
+        rd.requests, "get",
+        Mock(side_effect=AssertionError("POST 阈值场景不应走 GET")),
+    )
+
+    result = json.loads(render_diagram(session_id, big_source))
+    assert result["status"] == "ok"
+    assert result["transport"] == "POST"
+    assert len(post_calls) == 1
+    # POST 路径必须用 text/plain Content-Type
+    assert post_calls[0][1] == "text/plain"
+
+
+# ============ 日志路径 ============
+
+def test_render_diagram_writes_success_log(monkeypatch, session_id, tmp_root):
+    """成功调用应写 out/sessions/<id>/logs/render_diagram.log, 含 tool_start/tool_done"""
+    monkeypatch.setattr(
+        rd.requests, "get",
+        lambda url, **kw: _make_resp(200, content=_fake_png_bytes()),
+    )
+    render_diagram(session_id, "digraph G { A -> B }")
+
+    log_path = tmp_root / session_id / "logs" / "render_diagram.log"
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "tool_start" in content
+    assert "tool_done" in content
+    assert "language=graphviz" in content
+
+
+def test_render_diagram_writes_error_log(monkeypatch, session_id, tmp_root):
+    """语法错误时也应记录 kroki_error 事件到日志, 便于排查"""
+    monkeypatch.setattr(
+        rd.requests, "get",
+        lambda url, **kw: _make_resp(400, content=b"Error: bad", text="Error: bad"),
+    )
+    render_diagram(session_id, "digraph G { bad }")
+
+    log_path = tmp_root / session_id / "logs" / "render_diagram.log"
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "kroki_error" in content
+    assert "http_status=400" in content
