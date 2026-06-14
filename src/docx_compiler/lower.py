@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .diagnostics import Diagnostic, SupportStatus, support_summary
 from .ir import CellIR, CodeBlockIR, FormulaIR, ParagraphIR, RunIR, TableIR, TableRowIR, ImageIR
@@ -113,7 +114,11 @@ def filter_blocks(
     return blocks
 
 
-def lower_markdown_blocks(blocks: list[MarkdownBlock], style_mapping: dict) -> LoweringResult:
+def lower_markdown_blocks(
+    blocks: list[MarkdownBlock],
+    style_mapping: dict,
+    session_id: str | None = None,
+) -> LoweringResult:
     result = LoweringResult()
     normalized = normalize_block_support(blocks)
     result.source_blocks = normalized
@@ -140,7 +145,7 @@ def lower_markdown_blocks(blocks: list[MarkdownBlock], style_mapping: dict) -> L
         result.render_items.append(render_item)
         if previous is not None and render_item["line_start"] > previous["line_end"] + 1:
             result.layout_blocks.append(ParagraphIR(runs=[]))
-        result.layout_blocks.append(_item_to_layout_ir(render_item))
+        result.layout_blocks.append(_item_to_layout_ir(render_item, session_id))
         previous = render_item
 
     return result
@@ -181,7 +186,7 @@ def _sample_id_for_block(block: MarkdownBlock, style_mapping: dict) -> str | Non
     return style_mapping.get(block_type)
 
 
-def _item_to_layout_ir(item: dict) -> ParagraphIR | TableIR | CodeBlockIR | FormulaIR | ImageIR:
+def _item_to_layout_ir(item: dict, session_id: str | None = None) -> ParagraphIR | TableIR | CodeBlockIR | FormulaIR | ImageIR:
     if item["type"] == "table":
         return _item_to_table_ir(item)
     if item["type"] == "code_block":
@@ -205,7 +210,7 @@ def _item_to_layout_ir(item: dict) -> ParagraphIR | TableIR | CodeBlockIR | Form
         )
     if item["type"] == "image":
         return ImageIR(
-            src_path=item["src"],
+            src_path=_resolve_image_path(item["src"], session_id),
             alt_text=item.get("alt", ""),
             style_sample_id=item["sample_id"],
             block_id=item["block_id"],
@@ -247,6 +252,29 @@ def _item_to_table_ir(item: dict) -> TableIR:
             )
         rows.append(TableRowIR(cells=cells))
     return TableIR(rows=rows)
+
+
+def _resolve_image_path(raw_src: str, session_id: str | None) -> str:
+    """把 markdown 里的图片相对路径解析成 workspace 下的绝对路径字符串。
+
+    - session_id is None → 原样返回 (测试 / 旧调用方兼容)
+    - 已是绝对路径 → 原样返回 (LLM 不该写, 防御性兼容)
+    - 相对路径 → 通过 resolve_workspace_path 解析为绝对路径
+    - WorkspacePathError (越界 / 含 '..' / NUL 等) → fall back 原字符串
+      下游 render 层的 silent skip 会自然吞掉, 不让 lower 整体崩溃
+    """
+    if session_id is None:
+        return raw_src
+    if Path(raw_src).is_absolute():
+        return raw_src
+    try:
+        from workspace.guard import resolve_workspace_path, WorkspacePathError
+    except ModuleNotFoundError:
+        from src.workspace.guard import resolve_workspace_path, WorkspacePathError
+    try:
+        return str(resolve_workspace_path(session_id, raw_src, must_exist=False))
+    except WorkspacePathError:
+        return raw_src
 
 
 def _render_text(block: MarkdownBlock) -> str:

@@ -60,7 +60,7 @@ def apply_markdown_ir_to_table_cell(
     except ValueError as exc:
         return json_result({"status": "error", "message": str(exc), "markdown_path": str(target)})
 
-    lowering = lower_markdown_blocks(blocks, style_mapping)
+    lowering = lower_markdown_blocks(blocks, style_mapping, session_id=session_id)
     diagnostics = diagnostics_to_dicts(lowering.diagnostics)
     if has_errors(lowering.diagnostics):
         return json_result(
