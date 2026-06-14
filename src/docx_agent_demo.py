@@ -19,6 +19,7 @@ MD_DRAFT_TOOL_NAMES = {
     "ls",
     "read",
     "analyze_image_content",
+    "generate_image",
 }
 WORD_EDITING_TOOL_NAMES = {
     "read_docx_structure",
@@ -30,6 +31,7 @@ WORD_EDITING_TOOL_NAMES = {
     "ls",
     "read",
     "analyze_image_content",
+    "generate_image",
 }
 
 

@@ -134,6 +134,7 @@ class LLMClient:
         self.model = None
         self.thinking_type = None
         self.reasoning_effort = None
+        self.image_model = None  # Step 6: 生图模型 (用于 generate_image 工具)
 
         if self.provider == "deepseek":
             self.api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
@@ -283,6 +284,17 @@ class LLMClient:
         else:
             self._forward_tool_choice = _DEFAULT_FORWARD_TOOL_CHOICE.get(self.provider, False)
 
+        # 9. Step 6: 解析 image_model(生图模型,generate_image 工具使用)
+        # 优先级: provider block 显式 "image_model" > <PROVIDER>_IMAGE_MODEL 环境变量 > 默认值
+        # 注意: 仅当 provider 声明了 text_to_image capability 时才有意义,
+        #       create_image_generation 由调用方负责 capability 检查。
+        from .constants import DEFAULT_IMAGE_MODEL
+        self.image_model = (
+            provider_block.get("image_model")
+            or os.getenv(f"{self.provider.upper()}_IMAGE_MODEL")
+            or (DEFAULT_IMAGE_MODEL if self.provider == "sensenova" else None)
+        )
+
     # ────────────────────────── 公开 getter(旧接口,保留) ──────────────────────────
 
     def get_model_name(self) -> str:
@@ -420,6 +432,48 @@ class LLMClient:
         req = build_request_kwargs(self, messages, tools, **kwargs)
         req["stream"] = False
         return self.client.chat.completions.create(**req)
+
+    def create_image_generation(
+        self,
+        prompt: str,
+        size: str = "2752x1536",
+        n: int = 1,
+        **kwargs,
+    ):
+        """生图接口: 调用 /v1/images/generations, 复用现有 self.client。
+
+        Step 6 引入: 支持 sensenova-u1-fast 等生图模型。
+        - size 在调用前做早期校验,避免触发商汤 400 错误
+        - model 由 self.image_model 决定(可被 config 或 env 覆盖)
+        - 与 chat completions 完全独立,不共用 build_request_kwargs(参数结构不同)
+
+        调用方负责检查 capability:
+            if not adapter.has_capability("text_to_image"):
+                raise RuntimeError(...)
+        """
+        from .constants import SENSENOVA_U1_VALID_SIZES
+
+        # 早期 size 校验 — 避免商汤 API 返 400 后才报错
+        if size not in SENSENOVA_U1_VALID_SIZES:
+            raise ValueError(
+                f"非法 size: {size!r}。"
+                f"商汤 sensenova-u1-fast 仅支持 11 种 2K 尺寸: {sorted(SENSENOVA_U1_VALID_SIZES)}"
+            )
+
+        if not self.image_model:
+            raise RuntimeError(
+                f"Provider {self.provider!r} 未配置生图模型。"
+                f"请在 config.json 的 providers.{self.provider}.image_model 字段设置,"
+                f"或设置环境变量 {self.provider.upper()}_IMAGE_MODEL。"
+            )
+
+        return self.client.images.generate(
+            model=self.image_model,
+            prompt=prompt,
+            size=size,
+            n=n,
+            **kwargs,
+        )
 
     # ────────────────────────── 内部辅助(Step 1 parity 测试用) ──────────────────────────
 

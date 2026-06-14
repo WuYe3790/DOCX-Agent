@@ -34,6 +34,16 @@
       "capabilities": ["chat", "tools", "vision"]
     },
 
+    "通用接口_带生图": {
+      "_doc": "需要 text_to_image 能力时,声明 capabilities + image_model 字段。generate_image 工具会自动走它。尺寸校验由 SENSENOVA_U1_VALID_SIZES 常量保证 (修改 src/llm_adapter/constants.py 即可扩展新模型尺寸集)",
+      "profile": "openai_compatible",
+      "api_key": "sk-YOUR_KEY",
+      "base_url": "https://image-endpoint.example.com/v1",
+      "model": "your-chat-model",
+      "image_model": "your-image-model",
+      "capabilities": ["chat", "tools", "text_to_image"]
+    },
+
     "通用接口_自定义reasoning路径": {
       "_doc": "新 provider 的 reasoning 字段在自定义 dotted-path 时声明 reasoning_field",
       "profile": "openai_compatible",
