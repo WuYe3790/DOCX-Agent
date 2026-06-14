@@ -47,7 +47,16 @@ Authoritative source of truth: `*_TOOL_NAMES` sets in `src/prompts.py` and `tool
 
 ### Core Systems
 
-**Tool Registry** (`src/docx_tools/registry.py`): All 36+ tools registered here in two parallel structures (`TOOLS` dict for dispatch, `TOOLS_SCHEMA` list for LLM-facing schemas — keep them in sync when adding tools). Tools grouped into `basic_tools/`, `md_tools/`, and `docx_tools/`.
+**Tool Registry** (`src/docx_tools/registry.py`): All 35 tools registered here in two parallel structures (`TOOLS` dict for dispatch, `TOOLS_SCHEMA` list for LLM-facing schemas). Tools grouped into `basic_tools/`, `md_tools/`, and `docx_tools/`.
+
+**Adding a new LLM-visible tool — four-place registration** (missing any one produces a different failure mode):
+
+1. `src/docx_tools/registry.py` — append to **both** `TOOLS` dict and `TOOLS_SCHEMA` list. Missing → LLM can't see / can't dispatch.
+2. `src/prompts.py` — add the tool name to the right `*_TOOL_NAMES` set for each stage that should expose it, and (when behavior nudging is needed) add a clause to the matching `state_rule`. Missing → tool is dispatchable but invisible to the LLM in that stage.
+3. `src/agent.py` — add the tool name to `SESSION_TOOLS` if its Python signature takes `session_id`. Missing → tool is visible and selected, but the dispatcher won't inject `session_id`, so the call dies with `missing 1 required positional argument: 'session_id'`.
+4. Tests — at minimum a unit test of the tool function in `tests/test_<tool>.py`. Recommended: a real-Kroki / real-API e2e probe to verify the integration layer beyond the in-process fixture.
+
+The `SESSION_TOOLS` set in `src/agent.py:24-63` is the hidden fourth registry — its existence is easy to miss because it doesn't appear in any module-level `__all__` or `TOOLS_SCHEMA`. A typo or missing entry here only surfaces when a real WebSocket session calls the tool; unit tests with fixture-injected `session_id` will silently pass.
 
 **Markdown Compiler Pipeline** (`src/docx_compiler/`):
 ```
