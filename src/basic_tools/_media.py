@@ -25,10 +25,15 @@ from pathlib import Path
 # === Workspace 沙箱 (re-export from workspace.guard) ===
 # 不重新实现 — workspace.guard 是项目唯一路径沙箱,违反这条会导致越权漏洞
 sys.path.append(str(Path(__file__).parent.parent))
-from workspace.guard import resolve_workspace_path, WorkspacePathError  # noqa: E402
+from workspace.guard import (  # noqa: E402
+    resolve_workspace_path,
+    workspace_dir,
+    WorkspacePathError,
+)
 
 __all__ = [
     "resolve_workspace_path",
+    "workspace_dir",
     "WorkspacePathError",
     "download_to_workspace",
     "encode_image_as_data_url",
@@ -67,7 +72,7 @@ def download_to_workspace(session_id: str, url: str, filename: str) -> str:
         WorkspacePathError:   filename 含路径分隔符或越界
         ValueError:           filename 防御性校验失败
     """
-    workspace = resolve_workspace_path(session_id, "")
+    workspace = workspace_dir(session_id)  # 不走 resolve_workspace_path,后者拒绝空 path
     media_dir = workspace / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
 
