@@ -266,6 +266,99 @@ wrapper 走同一条路径, 避免再次重犯. 或在 CI 加 grep lint: 禁止 
 
 ---
 
+## Bug #4: `_docx_factory._build_minimal_docx` 不写 rels, 任何写 rels 的工具跑不通
+
+**发现时间**: 2026-06-14
+**发现途径**: `tests/test_insert_image_after_paragraph.py` PR-2.2
+**严重程度**: 中 — 工具本身能跑, 测试基础设施缺
+**影响范围**: 所有写 `word/_rels/document.xml.rels` 的工具 (插图, 加超链接, 加 header/footer reference)
+
+### 复现
+
+```python
+import sys
+sys.path.insert(0, "src")
+from docx_tools.insert_image_after_paragraph import insert_image_after_paragraph
+
+# 用 _build_minimal_docx 构造的 docx 调工具
+result = insert_image_after_paragraph(
+    session_id, "in.docx", "out.docx",
+    image_path="test.png", paragraph_index=1, anchor_text="anchor",
+)
+# 抛: Failed to repackage and write document XML:
+#      "There is no item named 'word/_rels/document.xml.rels' in the archive"
+```
+
+### 根本原因
+
+`tests/_docx_factory.py` 的 `_build_minimal_docx()` 只写 `word/document.xml`,
+不写 `[Content_Types].xml` / `_rels/.rels` / `word/_rels/document.xml.rels`.
+`write_document_xml` (src/docx_tools/common.py) 在写新加的 image rel 时
+读不到现有的 rels 文件, 抛错.
+
+### 修法 (已修)
+
+`tests/_docx_factory.py` 新增 `_build_full_docx(path, paragraphs)`,
+写完整 docx (含 [Content_Types].xml / _rels/.rels / word/_rels/document.xml.rels).
+需要写 rels 的工具测试改用 `_build_full_docx`.
+
+### 验证
+
+`tests/test_insert_image_after_paragraph.py` 6 case 全过.
+
+### 相关测试
+
+`tests/test_insert_image_after_paragraph.py` 全部改用 `_build_full_docx`.
+
+---
+
+## Bug #5: `diff_docx` 工具不 graceful 处理损坏 zip
+
+**发现时间**: 2026-06-14
+**发现途径**: `tests/test_diff_docx.py` PR-3.2 — test_zip_corrupted_graceful
+**严重程度**: 中 — 工具遇到损坏输入直接抛异常, 调用方崩溃
+**影响范围**: `diff_docx` 工具
+
+### 复现
+
+```python
+import sys
+sys.path.insert(0, "src")
+from docx_tools.diff_docx import diff_docx
+# 假设 before.docx 是损坏文件 (e.g. write_bytes(b"not a zip"))
+result = diff_docx("session", "before.docx", "after.docx")
+# 抛: zipfile.BadZipFile: File is not a zip file
+```
+
+### 根本原因
+
+`src/docx_tools/diff_docx.py:69` 的 `_zip_file_map` 用 `zipfile.ZipFile(docx_path, "r")`
+没 try/except 损坏文件. 抛 BadZipFile 直接冒到调用方.
+
+### 建议修法
+
+```python
+def _zip_file_map(docx_path: str):
+    try:
+        with zipfile.ZipFile(docx_path, "r") as docx:
+            return {info.filename: info.file_size for info in docx.infolist() if not info.is_dir()}
+    except (zipfile.BadZipFile, OSError):
+        return {}  # 损坏 zip 当空文件处理
+```
+
+同样 `_zip_member_hash` 也要加 try/except.
+
+### 验证
+
+修完后, 跑 `tests/test_diff_docx.py::TestDiffDocx::test_zip_corrupted_graceful`,
+去掉 xfail 标记应过 (paragraph_changes 为空, 不抛).
+
+### 相关测试
+
+`tests/test_diff_docx.py::test_zip_corrupted_graceful` — 1 case, 标 xfail.
+
+---
+
 ## 添加新 bug 条目的模板
 
 ```markdown
