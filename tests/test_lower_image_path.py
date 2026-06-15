@@ -102,3 +102,96 @@ class TestLowerMarkdownBlocksImage:
             session_id=None,
         )
         assert image_ir.src_path == "media/foo.png"
+
+
+# === lower_markdown_blocks 集成: 非图片 block 的 IR (PR-3.1 补 5 case) ===
+
+
+class TestLowerMarkdownBlocksTable:
+    """表格 markdown → TableIR, 含 rows/cells."""
+
+    def _lower_table_md(self, md_text, style_mapping, session_id=None):
+        blocks = parse_markdown_blocks(md_text)
+        result = lower_markdown_blocks(blocks, style_mapping, session_id=session_id)
+        return result
+
+    def test_table_block_lowered_to_table_ir(self, tmp_sessions_root):
+        """| h1 | h2 | 表 → TableIR, 含 1+ rows."""
+        result = self._lower_table_md(
+            "| 列1 | 列2 |\n| --- | --- |\n| a | b |",
+            style_mapping={"table": "S001"},
+        )
+        # 找 layout_blocks 里的 TableIR
+        from docx_compiler.ir import TableIR
+        tables = [b for b in result.layout_blocks if isinstance(b, TableIR)]
+        assert len(tables) == 1, f"应有 1 个 TableIR, 实际 {len(tables)}"
+        assert len(tables[0].rows) >= 1
+
+
+class TestLowerMarkdownBlocksList:
+    """列表 markdown → ParagraphIR (list_item 类型), 带 list_level/marker."""
+
+    def test_unordered_list_lowered_to_list_items(self, tmp_sessions_root):
+        result = lower_markdown_blocks(
+            parse_markdown_blocks("- a\n- b\n- c"),
+            style_mapping={"list_item": "S001"},
+        )
+        from docx_compiler.ir import ParagraphIR
+        items = [b for b in result.layout_blocks if isinstance(b, ParagraphIR)]
+        assert len(items) == 3
+        # 都应标 list_item 类型
+        assert all(b.block_type == "list_item" for b in items)
+        # 都应有 list_level (嵌套层)
+        assert all(b.list_level is not None for b in items)
+
+
+class TestLowerMarkdownBlocksCode:
+    """代码块 markdown → CodeBlockIR, 含 code/language."""
+
+    def test_fenced_code_lowered_to_code_block_ir(self, tmp_sessions_root):
+        result = lower_markdown_blocks(
+            parse_markdown_blocks("```python\nprint(1)\n```"),
+            style_mapping={"code_block": "S001"},
+        )
+        from docx_compiler.ir import CodeBlockIR
+        codes = [b for b in result.layout_blocks if isinstance(b, CodeBlockIR)]
+        assert len(codes) == 1
+        assert codes[0].language == "python"
+        assert "print(1)" in codes[0].code
+
+
+class TestLowerMarkdownBlocksFormula:
+    """公式 markdown → FormulaIR, 含 source/source_format."""
+
+    def test_display_formula_lowered_to_formula_ir(self, tmp_sessions_root):
+        result = lower_markdown_blocks(
+            parse_markdown_blocks("$$\nE=mc^2\n$$"),
+            # 注意: lower.py:182 用 "formula" 这个 key, 不是 "formula_block"
+            style_mapping={"formula": "S001"},
+        )
+        from docx_compiler.ir import FormulaIR
+        formulas = [b for b in result.layout_blocks if isinstance(b, FormulaIR)]
+        assert len(formulas) == 1
+        assert formulas[0].source_format == "latex"
+        assert "E=mc^2" in formulas[0].source
+
+
+class TestLowerMarkdownBlocksMissingStyleMapping:
+    """style_mapping 缺某 block type 的 key → diagnostic MISSING_STYLE_MAPPING."""
+
+    def test_missing_style_mapping_key_adds_diagnostic(self, tmp_sessions_root):
+        # 故意不给 paragraph style key
+        result = lower_markdown_blocks(
+            parse_markdown_blocks("plain paragraph"),
+            style_mapping={},  # 缺所有 key
+        )
+        # 诊断里应有 MISSING_STYLE_MAPPING 错误
+        from docx_compiler.diagnostics import has_errors
+        assert has_errors(result.diagnostics), (
+            "缺 style_mapping key 时应产生 error 级别 diagnostic"
+        )
+        # 检查诊断里含 "MISSING_STYLE_MAPPING" code
+        codes = [d.code for d in result.diagnostics]
+        assert any("MISSING_STYLE_MAPPING" in c for c in codes), (
+            f"诊断 codes 应含 MISSING_STYLE_MAPPING, 实际 {codes}"
+        )
