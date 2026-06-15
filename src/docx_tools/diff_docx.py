@@ -1,12 +1,12 @@
+import hashlib
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
 from workspace.guard import resolve_workspace_path, WorkspacePathError, to_relative_path
 
-from .common import file_sha256, json_result, load_document_xml, paragraph_text, paragraphs
+from .common import json_result, load_document_xml, paragraph_text, paragraphs
 
 
 def diff_docx(session_id: str, before_docx: str, after_docx: str, marker_prefix: str = "") -> str:
@@ -67,25 +67,32 @@ def diff_docx(session_id: str, before_docx: str, after_docx: str, marker_prefix:
 
 
 def _zip_file_map(docx_path: str):
-    with zipfile.ZipFile(docx_path, "r") as docx:
-        return {info.filename: info.file_size for info in docx.infolist() if not info.is_dir()}
+    try:
+        with zipfile.ZipFile(docx_path, "r") as docx:
+            return {info.filename: info.file_size for info in docx.infolist() if not info.is_dir()}
+    except (zipfile.BadZipFile, OSError):
+        # 损坏 zip / 权限不足: 当作空文件处理, 不抛 (BUGS.md Bug #5)
+        return {}
 
 
 def _zip_member_hash(docx_path: str, name: str):
-    with zipfile.ZipFile(docx_path, "r") as docx:
-        data = docx.read(name)
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        f.write(data)
-        temp_path = Path(f.name)
     try:
-        return file_sha256(temp_path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+        with zipfile.ZipFile(docx_path, "r") as docx:
+            data = docx.read(name)
+        # data 已在内存, 直接 hashlib 算 sha256, 省去 tempfile + 写盘 I/O
+        return hashlib.sha256(data).hexdigest()
+    except (zipfile.BadZipFile, OSError, KeyError):
+        # 损坏 zip 或 entry 不可读: 返回空 hash, "未变"判断失效 (acceptable noise)
+        return ""
 
 
 def _paragraph_texts(docx_path: str):
-    root = load_document_xml(docx_path)
-    return [paragraph_text(p) for p in paragraphs(root)]
+    try:
+        root = load_document_xml(docx_path)
+        return [paragraph_text(p) for p in paragraphs(root)]
+    except (zipfile.BadZipFile, OSError, KeyError):
+        # 损坏 zip: 当作无段落, 不抛 (BUGS.md Bug #5)
+        return []
 
 
 tools_schema = {

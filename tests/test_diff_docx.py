@@ -13,7 +13,6 @@
 """
 import json
 import sys
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -82,13 +81,20 @@ class TestDiffDocx:
         assert "code" in result  # 应有 WorkspacePathError code
 
     def test_zip_corrupted_graceful(self, tmp_root, session_id):
-        """损坏 zip → graceful (空 paragraph_changes), 不抛.
+        """损坏 zip → graceful (不抛 BadZipFile), diff 仍能识别有效文件的差异.
 
-        当前 BUGS.md Bug #5: 实际行为是抛 zipfile.BadZipFile. 修好后去掉 xfail.
+        BUGS.md Bug #5 已修: _zip_file_map / _zip_member_hash / _paragraph_texts
+        三处对损坏 zip 全部 graceful 返回空, diff_docx 不再抛 BadZipFile.
+        good.docx 有 "x" 一段, bad 当空处理, diff 正确识别 "段 1 新增".
         """
         bad_path = _ws(tmp_root, session_id) / "bad.docx"
         bad_path.write_bytes(b"not a zip file at all")
         _build_minimal_docx(_ws(tmp_root, session_id) / "good.docx", ["x"])
 
-        with pytest.raises(zipfile.BadZipFile):
-            diff_docx(session_id, "bad.docx", "good.docx")
+        result = json.loads(diff_docx(session_id, "bad.docx", "good.docx"))
+        # 关键: 不抛异常 (调用方拿到的是 dict, 不是 zipfile.BadZipFile)
+        assert isinstance(result, dict)
+        # graceful 行为: bad 当空处理, good 含 'x', diff 识别 1 个新增段
+        assert len(result["paragraph_changes"]) == 1
+        assert result["paragraph_changes"][0]["after"] == "x"
+        assert result["paragraph_changes"][0]["before"] == ""
