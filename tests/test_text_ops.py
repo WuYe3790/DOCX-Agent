@@ -53,23 +53,9 @@ def _ws(tmp_root, session_id: str) -> Path:
     return tmp_root / session_id / "workspace"
 
 
-def _safe_call(tool_fn, *args, **kwargs):
-    """调工具函数, 捕 TypeError (已知 json_result 序列化 _Element bug) 返回 None.
-
-    已知 bug: docx_tools/common.py:21 的 json_result 不会处理 lxml _Element.
-    详见 BUGS.md Bug #1. 当前仅 delete_text 触发, replace_text / insert_text_at
-    在 line 73/90 显式过滤了 "run" key 所以 OK.
-
-    本 helper 把 try/except 提到工具调用层:
-      - 工具正常返回 JSON 字符串 → 解析成 dict
-      - 工具抛 TypeError → 返回 None
-    测试用 `if result is not None` 条件断言 JSON 字段, 文件 side effect 永远断言.
-    bug 修好后 JSON 断言自动激活, 不需要改测试.
-    """
-    try:
-        return json.loads(tool_fn(*args, **kwargs))
-    except TypeError:
-        return None
+# (Bug #1 修复说明: delete_text.py 现在跟 replace_text / insert_text_at 一样
+#  在 result dict 里过滤了 change['run'], json_result 不再因 _Element TypeError.
+#  之前为绕过 bug 加的 _safe_call helper 已删除, 直接 json.loads(delete_text(...)).)
 
 
 # =====================================================================
@@ -336,15 +322,7 @@ class TestInsertTextAt:
 # =====================================================================
 
 class TestDeleteText:
-    """delete_text 工具测试.
-
-    注意: 工具返回的 JSON 包含 lxml _Element (在 change 字段),
-    json_result (docx_tools/common.py:21) 不能序列化, 触发 TypeError.
-    这是工具的已知 bug, 详见 BUGS.md Bug #1.
-    本测试用 _safe_call helper 容错:
-      - 文件 side effect 永远断言 (锁住核心行为)
-      - JSON 断言在 bug 修好后自动激活
-    """
+    """delete_text 工具测试."""
 
     def test_basic_delete(self, tmp_root, session_id):
         """基本删除: 把目标文本从段中移除."""
@@ -352,11 +330,11 @@ class TestDeleteText:
                             ["hello world"])
         out_path = _ws(tmp_root, session_id) / "out.docx"
 
-        result = _safe_call(delete_text,
-                            session_id, "in.docx", "out.docx", " world")
+        result = json.loads(delete_text(
+            session_id, "in.docx", "out.docx", " world"
+        ))
 
-        if result is not None:
-            assert result["status"] == "ok"
+        assert result["status"] == "ok"
         # 文件 side effect (核心行为, 锁住 regression)
         assert get_xml_text(out_path, "//w:t") == "hello"
 
@@ -373,11 +351,11 @@ class TestDeleteText:
         )
         out_path = _ws(tmp_root, session_id) / "out.docx"
 
-        result = _safe_call(delete_text,
-                            session_id, "in.docx", "out.docx", "lo wo")
+        result = json.loads(delete_text(
+            session_id, "in.docx", "out.docx", "lo wo"
+        ))
 
-        if result is not None:
-            assert result["status"] == "ok"
+        assert result["status"] == "ok"
         # 跨 run 删除 "lo wo" 后: "hel" + "rld" = "helrld"
         assert get_xml_text(out_path, "//w:t") == "helrld"
 
@@ -388,12 +366,12 @@ class TestDeleteText:
                             ["foo bar baz"])
         out_path = _ws(tmp_root, session_id) / "out.docx"
 
-        result = _safe_call(delete_text,
-                            session_id, "in.docx", "out.docx", " bar ",
-                            trim_surrounding_spaces=True)
+        result = json.loads(delete_text(
+            session_id, "in.docx", "out.docx", " bar ",
+            trim_surrounding_spaces=True
+        ))
 
-        if result is not None:
-            assert result["status"] == "ok"
+        assert result["status"] == "ok"
         # 工具应删除 " bar " (5 字符), 剩 "foo" + "baz" = "foobaz"
         assert get_xml_text(out_path, "//w:t") == "foobaz"
 
@@ -412,10 +390,10 @@ class TestDeleteText:
                             ["foofoo"])
         out_path = _ws(tmp_root, session_id) / "out.docx"
 
-        result = _safe_call(delete_text,
-                            session_id, "in.docx", "out.docx", "foo", occurrence=2)
+        result = json.loads(delete_text(
+            session_id, "in.docx", "out.docx", "foo", occurrence=2
+        ))
 
-        if result is not None:
-            assert result["status"] == "ok"
+        assert result["status"] == "ok"
         # 第 2 个 "foo" (位置 [3:6]) 被删, 剩 "foo"
         assert get_xml_text(out_path, "//w:t") == "foo"
