@@ -17,8 +17,8 @@ def set_paragraph_indent(
     input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     try:
         result = set_paragraph_indent_op(
-            docx_path=docx_path,
-            output_path=output_path,
+            docx_path=str(input_path),
+            output_path=str(output_path_resolved),
             paragraph_index=paragraph_index,
             left_twips=left_twips,
             first_line_twips=first_line_twips,

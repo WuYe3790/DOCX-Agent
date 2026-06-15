@@ -359,6 +359,66 @@ def _zip_file_map(docx_path: str):
 
 ---
 
+---
+
+## Bug #6: `set_paragraph_indent_op` 全 None 时仍写空 `<w:ind/>`
+
+**发现时间**: 2026-06-15
+**发现途径**: 修 Bug #2 时移除 `TestSetParagraphIndent` xfail, `test_all_none_omits_w_ind` 失败
+**严重程度**: 低 — 工具能用, 输出含无意义的空 `<w:ind/>`
+**影响范围**: `set_paragraph_indent` 工具在调用方传 3 个 None 参数时
+
+### 复现
+
+```python
+from docx_tools.set_paragraph_indent import set_paragraph_indent
+import json
+result = json.loads(set_paragraph_indent(
+    session_id, "in.docx", "out.docx", paragraph_index=1
+))
+# 输出 docx 第 1 段 <w:pPr> 含一个空 <w:ind/> 元素:
+#   <w:p><w:pPr><w:ind/></w:pPr>...</w:p>
+```
+
+### 根本原因
+
+`src/docx_compiler/table_ops.py:201-211` 无条件 `ppr.append(ind)`, 即使 `ind` 没设置任何属性:
+
+```python
+ind = etree.Element(f"{W}ind")
+if left_twips is not None:
+    ind.set(f"{W}left", str(int(left_twips)))
+...
+ppr.append(ind)  # ← BUG: 全 None 时仍 append 空 <w:ind/>
+```
+
+BUGS.md 描述的期望行为 (TestSetParagraphIndent class docstring 引用): "全部 None → 写入 <w:pPr> 但不写 <w:ind> 元素".
+
+### 修法 (已修)
+
+跳过 append, 直接 `write_document_xml` 返回:
+
+```python
+if left_twips is None and first_line_twips is None and hanging_twips is None:
+    write_document_xml(docx_path, output_path, root)
+    return {
+        "docx_path": docx_path,
+        "output_path": output_path,
+        "paragraph_index": paragraph_index,
+        "indent": {"left_twips": None, "first_line_twips": None, "hanging_twips": None},
+    }
+```
+
+### 验证
+
+`tests/test_paragraph_format_ops.py::TestSetParagraphIndent::test_all_none_omits_w_ind` 通过.
+
+### 相关测试
+
+- `tests/test_paragraph_format_ops.py::TestSetParagraphIndent::test_all_none_omits_w_ind` — 1 case
+
+---
+
 ## 添加新 bug 条目的模板
 
 ```markdown

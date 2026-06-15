@@ -206,9 +206,21 @@ def get_xml_elements(zip_path: Path, xpath: str) -> list:
 
 
 def get_xml_attr(zip_path: Path, xpath: str, attr: str) -> str | None:
-    """便捷: 取第一个匹配节点的某个属性. 节点为空时 assert 失败."""
+    """便捷: 取第一个匹配节点的某个属性. 节点为空时 assert 失败.
+
+    attr 支持三种写法:
+      - 本地名: "left"
+      - 带前缀: "w:left" — 从 NS 找命名空间, 翻译成 Clark notation
+      - Clark notation: "{http://...}left"
+    修复原因: lxml 的 Element.get() 只认 Clark notation,
+    "w:left" 直接传会被当作不同属性名.
+    """
     nodes = get_xml_elements(zip_path, xpath)
     assert nodes, f"xpath {xpath!r} 在 {zip_path} 内无匹配"
+    if ":" in attr and not attr.startswith("{"):
+        prefix, local = attr.split(":", 1)
+        if prefix in NS:
+            attr = f"{{{NS[prefix]}}}{local}"
     return nodes[0].get(attr)
 
 

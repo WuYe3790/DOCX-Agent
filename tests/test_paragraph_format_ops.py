@@ -228,19 +228,11 @@ class TestSetTextFormat:
 
 
 # =====================================================================
-# set_paragraph_indent: 5 case, 全部 @pytest.mark.xfail (BUGS.md Bug #2)
+# set_paragraph_indent: 5 case
 # =====================================================================
 
-@pytest.mark.xfail(
-    reason="BUGS.md Bug #2: set_paragraph_indent 不解析 workspace 路径就传底层 op, "
-           "触发 FileNotFoundError. 修好后去掉 xfail.",
-    raises=FileNotFoundError,
-)
 class TestSetParagraphIndent:
     """set_paragraph_indent 工具测试.
-
-    当前所有 case 都因 BUGS.md Bug #2 抛 FileNotFoundError. 修 bug 后这 5 个 case
-    应全过, 届时去掉 xfail 标记即可.
 
     API 提示:
       - paragraph_index 是 1-based (按 //w:p 计数)
