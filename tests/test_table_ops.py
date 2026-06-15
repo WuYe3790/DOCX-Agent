@@ -90,13 +90,9 @@ class TestInsertTableRowAfter:
 
 
 # =====================================================================
-# insert_table_column_after: 3 case (❌ BUG #3 → 全 xfail)
+# insert_table_column_after: 3 case
 # =====================================================================
 
-@pytest.mark.xfail(
-    reason="BUGS.md Bug #3: insert_table_column_after 不解析 workspace 路径就传底层 op",
-    raises=FileNotFoundError,
-)
 class TestInsertTableColumnAfter:
     def test_basic_insert_increases_column_count(self, tmp_root, session_id):
         _make_2x3_table(tmp_root, session_id)
@@ -283,13 +279,9 @@ class TestInsertTextInTableCell:
 
 
 # =====================================================================
-# insert_table_after_paragraph: 3 case (❌ BUG #3 → 全 xfail)
+# insert_table_after_paragraph: 3 case
 # =====================================================================
 
-@pytest.mark.xfail(
-    reason="BUGS.md Bug #3: insert_table_after_paragraph 不解析 workspace 路径",
-    raises=FileNotFoundError,
-)
 class TestInsertTableAfterParagraph:
     def test_insert_2x2_table_after_paragraph_1(self, tmp_root, session_id):
         # 至少要有一个段落才能让 paragraph_index=1 合法
@@ -334,13 +326,9 @@ class TestInsertTableAfterParagraph:
 
 
 # =====================================================================
-# insert_table_in_cell: 2 case (❌ BUG #3 → 全 xfail)
+# insert_table_in_cell: 2 case
 # =====================================================================
 
-@pytest.mark.xfail(
-    reason="BUGS.md Bug #3: insert_table_in_cell 不解析 workspace 路径",
-    raises=FileNotFoundError,
-)
 class TestInsertTableInCell:
     def test_nested_2x2_in_cell_1_1_1(self, tmp_root, session_id):
         _make_2x3_table(tmp_root, session_id)
@@ -362,13 +350,9 @@ class TestInsertTableInCell:
 
 
 # =====================================================================
-# merge_table_cells_horizontal: 3 case (❌ BUG #3 → 全 xfail)
+# merge_table_cells_horizontal: 3 case
 # =====================================================================
 
-@pytest.mark.xfail(
-    reason="BUGS.md Bug #3: merge_table_cells_horizontal 不解析 workspace 路径",
-    raises=FileNotFoundError,
-)
 class TestMergeTableCellsHorizontal:
     def test_merge_2_cells_creates_gridspan_2(self, tmp_root, session_id):
         _make_2x3_table(tmp_root, session_id)
