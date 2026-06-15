@@ -144,6 +144,51 @@ def _build_docx_with_table(
         zf.writestr("word/document.xml", xml_bytes)
 
 
+def _build_full_docx(path: Path, paragraphs: list[str]) -> None:
+    """写一个**完整**的 docx zip, 含 [Content_Types].xml / _rels/.rels /
+    word/_rels/document.xml.rels.
+
+    适用场景: 工具要写 word/_rels/document.xml.rels (e.g. 插入图片 / 加超链接).
+    _build_minimal_docx 只写 word/document.xml, 这种工具调会报:
+    "There is no item named 'word/_rels/document.xml.rels' in the archive".
+
+    跟 _build_minimal_docx 的区别:
+      - + [Content_Types].xml
+      - + _rels/.rels (root package rels)
+      - + word/_rels/document.xml.rels (空 rels, 工具自己加)
+    """
+    import zipfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(_para_xml(t) for t in paragraphs)
+    document_xml = WORD_XML_TEMPLATE.format(body=body).encode("utf-8")
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
+        '  <Default Extension="xml" ContentType="application/xml"/>\n'
+        '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n'
+        '  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>\n'
+        '</Types>\n'
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>\n'
+        '</Relationships>\n'
+    )
+    document_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>\n'
+    )
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("word/_rels/document.xml.rels", document_rels)
+        zf.writestr("word/document.xml", document_xml)
+
+
 # =====================================================================
 # Read 端辅助 (陷阱 2 防御: lxml import 严格封装)
 # =====================================================================
