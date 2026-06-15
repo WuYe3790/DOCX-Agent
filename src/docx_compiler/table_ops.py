@@ -201,6 +201,19 @@ def set_paragraph_indent_op(
     for child in list(ppr):
         if child.tag == f"{W}ind":
             ppr.remove(child)
+    # 三个 indent 参数全 None → 不写 <w:ind> 元素 (BUGS.md 期望行为)
+    if left_twips is None and first_line_twips is None and hanging_twips is None:
+        write_document_xml(docx_path, output_path, root)
+        return {
+            "docx_path": docx_path,
+            "output_path": output_path,
+            "paragraph_index": paragraph_index,
+            "indent": {
+                "left_twips": None,
+                "first_line_twips": None,
+                "hanging_twips": None,
+            },
+        }
     ind = etree.Element(f"{W}ind")
     if left_twips is not None:
         ind.set(f"{W}left", str(int(left_twips)))

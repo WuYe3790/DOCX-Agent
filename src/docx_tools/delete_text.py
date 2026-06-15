@@ -57,7 +57,7 @@ def delete_text(
                     "trim_surrounding_spaces": trim_surrounding_spaces,
                     "before_paragraph_text": before_text,
                     "after_paragraph_text": after_text,
-                    "change": change,
+                    "change": {k: v for k, v in change.items() if k != "run"},
                 }
             )
 

@@ -17,8 +17,8 @@ def merge_table_cells_horizontal(
     input_path, output_path_resolved = resolve_docx_io(session_id, docx_path, output_path)
     try:
         result = merge_table_cells_horizontal_op(
-            docx_path=docx_path,
-            output_path=output_path,
+            docx_path=str(input_path),
+            output_path=str(output_path_resolved),
             table_index=table_index,
             row_index=row_index,
             start_cell_index=start_cell_index,
